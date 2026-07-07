@@ -1,0 +1,157 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Cormorant:wght@400;500;600&family=JetBrains+Mono:wght@300;400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Cormorant", "Cormorant Garamond", Georgia, serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Custom Cosmic Effects & Utilities */
+@layer base {
+  body {
+    background-color: #05060a; /* Deep space black */
+    color: #e8e0d2;
+    overflow-x: hidden;
+    font-family: var(--font-sans);
+  }
+
+  /* Custom high-contrast scrollbars for cosmic terminal feel */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgba(3, 7, 18, 0.5);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(139, 92, 246, 0.3);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(139, 92, 246, 0.6);
+  }
+}
+
+/* Engine-managed 3D world labels (positioned per-frame via transform) */
+.galaxy-label {
+  left: 0;
+  top: 0;
+  transition: opacity 0.35s ease;
+  text-shadow:
+    0 1px 2px rgba(5, 6, 10, 0.98),
+    0 0 6px rgba(5, 6, 10, 0.95),
+    0 0 18px rgba(5, 6, 10, 0.85);
+}
+
+/* Minimal volume slider — a thin line with a small paper-white handle */
+.volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #e8e0d2;
+  cursor: pointer;
+  margin-top: -4px;
+}
+.volume-slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: #e8e0d2;
+  border: none;
+  cursor: pointer;
+}
+
+/* Analog film grain — SVG turbulence, animated in discrete steps */
+.galaxy-grain {
+  opacity: 0.05;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 240px 240px;
+  mix-blend-mode: overlay;
+  animation: grain-shift 0.9s steps(3) infinite;
+}
+
+@keyframes grain-shift {
+  0% { background-position: 0 0; }
+  33% { background-position: 80px -60px; }
+  66% { background-position: -70px 40px; }
+  100% { background-position: 0 0; }
+}
+
+/* Nebula background glow */
+.nebula-glow {
+  background: radial-gradient(circle at 50% 50%, rgba(139, 92, 246, 0.15) 0%, rgba(59, 130, 246, 0.08) 30%, rgba(3, 7, 18, 0) 70%);
+  pointer-events: none;
+}
+
+/* Star dust particle effect */
+.star-dust {
+  background-image: 
+    radial-gradient(1px 1px at 20px 30px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 40px 70px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(1.5px 1.5px at 120px 80px, rgba(255,255,255,0.8), rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 200px 150px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 290px 220px, rgba(255,255,255,0.9), rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 320px 50px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(1.5px 1.5px at 450px 350px, rgba(255,255,255,0.7), rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 510px 120px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 620px 280px, rgba(168, 85, 247, 0.5), rgba(0,0,0,0));
+  background-size: 550px 550px;
+}
+
+/* Cosmic pulsating halo */
+@keyframes cosmic-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.2;
+    box-shadow: 0 0 15px var(--glow-color);
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.45;
+    box-shadow: 0 0 30px var(--glow-color);
+  }
+}
+
+.cosmic-pulse-glow {
+  animation: cosmic-pulse 4s infinite ease-in-out;
+}
+
+/* Neon text shadows */
+.neon-text-purple {
+  text-shadow: 0 0 8px rgba(168, 85, 247, 0.6), 0 0 20px rgba(168, 85, 247, 0.2);
+}
+
+.neon-text-blue {
+  text-shadow: 0 0 8px rgba(59, 130, 246, 0.6), 0 0 20px rgba(59, 130, 246, 0.2);
+}
+
+.neon-text-cyan {
+  text-shadow: 0 0 8px rgba(6, 182, 212, 0.6), 0 0 20px rgba(6, 182, 212, 0.2);
+}
+
+/* Custom interactive active links animation */
+@keyframes link-flow {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -20;
+  }
+}
+
+.link-flowing {
+  stroke-dasharray: 5, 5;
+  animation: link-flow 1s linear infinite;
+}
+
+/* Smooth rotational background stars */
+@keyframes slow-rotate {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.cosmic-rotate {
+  animation: slow-rotate 180s linear infinite;
+}
