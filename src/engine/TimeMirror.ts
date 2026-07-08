@@ -2,19 +2,27 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * TimeMirror — a vertical elliptical "time lens" floating in space.
- * The album artwork is fused into a morphing, noise-perturbed ellipse whose
- * edge dissolves into stardust. Pointer movement spawns ripples across the
- * surface; audio levels make the rim breathe. Rendered as a billboarded
- * plane + an additive rim particle cloud.
+ * TimeMirror v3 — a complete, readable artwork whose EDGES dissolve into
+ * living particles (the reference behavior: the image itself stays intact;
+ * turbulence and fluidity belong to the rim).
+ *
+ * Two co-registered layers:
+ *   1. The image plane — normal blending (physically cannot blow out),
+ *      zero distortion in the center, a gentle flow that only wakes up near
+ *      the rim, pointer ripples, and a noise-torn alpha fade toward the edge.
+ *   2. The rim particle band — pixels of the edge region reborn as grains
+ *      (color continuity is what sells the fusion), curl-noise wind, radial
+ *      plumes, and a pointer repulsion hole that heals itself.
  */
 
 import * as THREE from 'three';
 import { gsap } from 'gsap';
 
+const PLANE_W = 26;
+const PLANE_H = 36;
 const MAX_RIPPLES = 8;
 
-// ---------- GLSL helpers ----------
+// ---------- shared GLSL noise ----------
 const NOISE_GLSL = /* glsl */ `
   float hash21(vec2 p) {
     p = fract(p * vec2(234.34, 435.345));
@@ -33,17 +41,18 @@ const NOISE_GLSL = /* glsl */ `
   }
   float fbm(vec2 p) {
     float v = 0.0;
-    float amp = 0.5;
+    float amp = 0.55;
     for (int i = 0; i < 3; i++) {
       v += amp * vnoise(p);
-      p *= 2.1;
+      p *= 2.13;
       amp *= 0.5;
     }
     return v;
   }
 `;
 
-const MIRROR_VERT = /* glsl */ `
+// ---------- layer 1: the image plane ----------
+const PLANE_VERT = /* glsl */ `
   varying vec2 vUv;
   void main() {
     vUv = uv;
@@ -51,131 +60,204 @@ const MIRROR_VERT = /* glsl */ `
   }
 `;
 
-const MIRROR_FRAG = /* glsl */ `
+const PLANE_FRAG = /* glsl */ `
   uniform sampler2D uMap;
-  uniform float uHasMap;      // crossfades procedural core -> artwork
+  uniform float uHasMap;
   uniform float uTime;
-  uniform float uAspect;      // plane width / height, for cover-fit sampling
+  uniform float uAspect;
   uniform vec3 uColor;
   uniform float uBass;
-  uniform float uMids;
   uniform float uHighs;
   uniform float uOpacity;
-  uniform vec4 uRipples[${MAX_RIPPLES}]; // (u, v, startTime, strength)
+  uniform float uForm;                    // 0 hidden -> 1 revealed from center
+  uniform vec4 uRipples[${MAX_RIPPLES}];  // (u, v, startTime, strength)
   varying vec2 vUv;
 
   ${NOISE_GLSL}
 
   void main() {
-    // Centered coords, -1..1
     vec2 p = vUv * 2.0 - 1.0;
+    float e = length(p / vec2(0.66, 0.86)); // 0 center .. 1 ellipse rim
 
-    // ---- Ripples: displacement + brightness ----
+    // ---- pointer ripples: a soft sheen only — NO uv displacement.
+    // Displacing the texture made the whole image judder under the cursor;
+    // the picture must stay rock-steady, light is feedback enough. ----
     float rippleBright = 0.0;
-    vec2 rippleDisp = vec2(0.0);
     for (int i = 0; i < ${MAX_RIPPLES}; i++) {
       vec4 rip = uRipples[i];
       if (rip.w <= 0.0) continue;
       float age = uTime - rip.z;
-      if (age < 0.0 || age > 3.2) continue;
+      if (age < 0.0 || age > 2.0) continue;
       vec2 toP = vUv - rip.xy;
       float rd = length(toP);
-      float wave = sin(rd * 40.0 - age * 8.5) * exp(-rd * 5.5) * exp(-age * 1.55) * rip.w;
-      rippleBright += wave;
-      rippleDisp += normalize(toP + 1e-5) * wave * 0.024;
+      rippleBright += sin(rd * 40.0 - age * 7.0) * exp(-rd * 9.0) * exp(-age * 2.2) * rip.w;
     }
+    rippleBright *= smoothstep(0.98, 0.55, e); // fades out toward the rim
 
-    // ---- Morphing elliptical SDF (seamless angular noise) ----
-    float rx = 0.66;
-    float ry = 0.86;
-    vec2 dir = normalize(p + 1e-5);
-    // sample noise on a circle so there is no seam at +-PI
-    vec2 nCoord = dir * 1.55 + vec2(uTime * 0.14, -uTime * 0.09);
-    float wob = (fbm(nCoord) - 0.5) * 2.0;                 // -1..1
-    float wobAmp = 0.055 + uBass * 0.075 + uMids * 0.02;   // breathes with music
-    float d = length(p / vec2(rx, ry)) - 1.0 + wob * wobAmp + rippleBright * 0.05;
-
-    // ---- Artwork sample with flowing distortion (cover-fit: square art fills the tall oval) ----
+    // ---- flow distortion ONLY at the outer rim; the image core is static ----
+    float flowZone = smoothstep(0.68, 1.02, e);
     vec2 flow = vec2(
-      fbm(vUv * 2.6 + uTime * 0.05),
-      fbm(vUv * 2.6 - uTime * 0.04 + 7.3)
+      fbm(vUv * 3.0 + uTime * 0.07),
+      fbm(vUv * 3.0 - uTime * 0.055 + 7.3)
     ) - 0.5;
-    vec2 texUv = vUv + flow * 0.012 + rippleDisp;
+    vec2 texUv = vUv + flow * flowZone * (0.022 + uBass * 0.014);
     texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
+
     vec3 tex = texture2D(uMap, texUv).rgb;
+    float swirl = fbm(p * 2.1 + vec2(uTime * 0.1, -uTime * 0.07));
+    vec3 proc = uColor * (0.3 + 0.7 * swirl);
+    vec3 col = mix(proc, tex, uHasMap);
 
-    // Procedural nebula core (used before artwork loads / crossfade)
-    float swirl = fbm(p * 2.2 + vec2(uTime * 0.12, uTime * 0.08));
-    vec3 proc = mix(uColor * 0.35, uColor, swirl) + vec3(swirl * swirl * 0.55);
-    vec3 img = mix(proc, tex, uHasMap);
+    // ---- torn, irregular edge — NOT an ellipse. A large-amplitude angular
+    // contour noise rips the outline into lobes/spikes (matches the reference:
+    // a ragged blob, not a ring). The image and the rim particles share this
+    // SAME contour, so they read as one crumbling body. ----
+    vec2 dir = normalize(p + 1e-5);
+    // seamless angular fbm (sample on a circle so there is no atan seam)
+    float lobe = fbm(dir * 2.1 + vec2(uTime * 0.05, -uTime * 0.045)) - 0.5;  // big lobes
+    float fine = fbm(dir * 6.5 - uTime * 0.035 + 3.7) - 0.5;                 // fine tears
+    float contour = lobe * 0.34 + fine * 0.12;                              // total swing ~0.23
+    float ee = e + contour;
+    // wide fade band [0.62, 1.06]: clear core then a long ragged dissolve, the
+    // large contour swing making the actual boundary highly irregular.
+    float edgeFade = 1.0 - smoothstep(0.62, 1.06, ee);
+    // dotted erosion inside the fade band — the image breaks into grains
+    float grain = fbm(vUv * 40.0 + uTime * 0.1);
+    float band = smoothstep(0.62, 1.06, ee);
+    edgeFade = max(edgeFade, (1.0 - band) * step(band, grain) * 0.6);
 
-    // Slight vignette inside the lens keeps focus at the center
-    float vig = 1.0 - smoothstep(0.35, 1.15, length(p / vec2(rx, ry)));
-    img *= 0.55 + 0.45 * vig;
+    // ---- radial reveal (opening: the image develops from the center) ----
+    float revealR = uForm * 1.28;
+    float reveal = smoothstep(revealR + 0.09, revealR - 0.10, e + (swirl - 0.5) * 0.16);
 
-    // ---- Region masks ----
-    float inside = 1.0 - smoothstep(-0.06, 0.045, d);
-
-    // Dissolve band: image crumbles into dots near the edge
-    float grain = fbm(vUv * 34.0 + uTime * 0.18);
-    float band = smoothstep(0.10, -0.10, d);      // 0 far outside -> 1 inside
-    float dissolve = step(1.0 - band, grain);      // dotted erosion
-    float alphaMask = max(inside, band * dissolve * 0.9);
-
-    // ---- Rim glow ----
-    float glow = exp(-abs(d) * 13.0);
-    vec3 glowColor = mix(vec3(1.0), uColor, 0.5);
-    float glowAmt = glow * (0.38 + uHighs * 1.0 + rippleBright * 0.35);
-
-    vec3 col = img * (0.72 + uBass * 0.1 + max(rippleBright, 0.0) * 0.5) * alphaMask
-             + glowColor * glowAmt;
-
-    float alpha = clamp(alphaMask + glowAmt * 0.85, 0.0, 1.0) * uOpacity;
+    float alpha = edgeFade * reveal * uOpacity;
     if (alpha < 0.004) discard;
+
+    // dusk-dim, and hard-clamped BELOW the bloom threshold (0.82) so even a
+    // white/bright-yellow cover reads as a photo, never a light source
+    col *= 0.5 + rippleBright * 0.18 + uHighs * 0.04;
+    col = min(col, vec3(0.78));
     gl_FragColor = vec4(col, alpha);
   }
 `;
 
+// ---------- layer 2: the rim particle band ----------
 const RIM_VERT = /* glsl */ `
-  attribute float aAngle;
-  attribute float aRadial;   // gaussian offset from the rim, world units
-  attribute float aSize;
-  attribute float aSpeed;
-  attribute float aPhase;
+  uniform sampler2D uMap;
+  uniform float uHasMap;
   uniform float uTime;
+  uniform float uForm;
+  uniform float uOpacity;
   uniform float uBass;
   uniform float uHighs;
+  uniform vec3 uColor;
+  uniform vec4 uRipples[${MAX_RIPPLES}]; // (u, v, startTime, strength) — same waves as the plane
   uniform float uPixelRatio;
-  varying float vTwinkle;
-  varying float vCore;
+  uniform float uAspect;
+  attribute vec2 aHome;   // uv-space rest position (in the rim band)
+  attribute float aRand;
+  attribute float aEdge;  // 0 inner band edge .. 1 outer plume tip
+  varying vec3 vColor;
+  varying float vAlpha;
+
+  ${NOISE_GLSL}
+
+  vec2 curl(vec2 p) {
+    float e = 0.14;
+    float n1 = fbm(p + vec2(0.0, e));
+    float n2 = fbm(p - vec2(0.0, e));
+    float n3 = fbm(p + vec2(e, 0.0));
+    float n4 = fbm(p - vec2(e, 0.0));
+    return vec2(n1 - n2, n4 - n3) / (2.0 * e);
+  }
+
   void main() {
-    float ang = aAngle + uTime * aSpeed;
-    // Ellipse rim in the mirror's local plane (must match plane geometry below)
-    float rx = 8.6;
-    float ry = 15.5;
-    float breathe = 1.0 + uBass * 0.16 + sin(uTime * 0.7 + aPhase) * 0.025;
-    float rad = 1.0 + (aRadial + sin(uTime * 1.3 + aPhase * 9.0) * 0.35) / 12.0;
-    vec3 p = vec3(cos(ang) * rx * rad * breathe, sin(ang) * ry * rad * breathe, sin(aPhase * 13.0 + uTime) * 1.4);
-    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vec2 homeW = (aHome - 0.5) * vec2(${PLANE_W.toFixed(1)}, ${PLANE_H.toFixed(1)});
+    vec2 pEll = (aHome * 2.0 - 1.0) / vec2(0.66, 0.86);
+    vec2 outDir = normalize(pEll + 1e-5);
+
+    // SAME irregular contour as the image plane — the particle cloud warps to
+    // the identical ragged outline, so grains + image read as one crumbling
+    // body (not a ring stuck onto an ellipse).
+    float clobe = fbm(outDir * 2.1 + vec2(uTime * 0.05, -uTime * 0.045)) - 0.5;
+    float cfine = fbm(outDir * 6.5 - uTime * 0.035 + 3.7) - 0.5;
+    float contour = clobe * 0.34 + cfine * 0.12; // matches PLANE_FRAG
+    homeW += outDir * contour * 12.0;            // push grains along the ragged edge
+
+    // scatter origin for the opening assembly
+    float r1 = hash21(vec2(aRand, 1.7));
+    float r2 = hash21(vec2(aRand, 9.2));
+    float r3 = hash21(vec2(aRand, 4.4));
+    vec3 scatter = vec3((r1 - 0.5) * 150.0, (r2 - 0.5) * 170.0, (r3 - 0.5) * 80.0);
+    float formT = smoothstep(0.0, 1.0, clamp(uForm * 1.6 - aRand * 0.6, 0.0, 1.0));
+
+    // wind: nearly still at the inner edge (must match the plane), wild outside
+    float wildness = pow(aEdge, 1.3);
+    float amp = (0.4 + uBass * 1.4) * mix(0.12, 3.6, wildness);
+    vec2 wind = curl(aHome * 3.2 + vec2(uTime * 0.055, uTime * 0.04)) * amp;
+    // radial plumes streaming off the rim
+    float plume = (fbm(aHome * 2.2 + uTime * 0.06 + aRand) - 0.35);
+    wind += outDir * wildness * plume * (2.6 + uBass * 2.0);
+
+    vec3 pos = vec3(homeW + wind, (vnoise(aHome * 5.0 + uTime * 0.12) - 0.5) * (1.0 + wildness * 5.0));
+
+    // pointer ripples — the SAME gentle waves as the image plane. Grains bob
+    // softly on the passing wave (no repulsion, no smearing, no shaking).
+    float rippleSum = 0.0;
+    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
+      vec4 rip = uRipples[i];
+      if (rip.w <= 0.0) continue;
+      float age = uTime - rip.z;
+      if (age < 0.0 || age > 2.0) continue;
+      float rd = distance(aHome, rip.xy);
+      rippleSum += sin(rd * 40.0 - age * 7.0) * exp(-rd * 9.0) * exp(-age * 2.2) * rip.w;
+    }
+    pos.xy += outDir * rippleSum * 0.35; // a breath, not a shove
+    pos.z += rippleSum * 0.3;
+
+    pos = mix(scatter, pos, formT);
+
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
-    float att = 260.0 / max(1.0, -mv.z);
-    gl_PointSize = aSize * att * uPixelRatio * (1.0 + uHighs * 0.5);
-    vTwinkle = 0.4 + 0.6 * (0.5 + 0.5 * sin(uTime * 2.4 + aPhase * 17.0));
-    vCore = step(0.82, fract(aPhase * 3.17)); // some particles burn white-hot
+
+    // grain color: born from the edge pixel but reborn as COOL FAINT DUST.
+    // Additive stacking is unbounded, so bright covers must NOT make bright
+    // grains — the reference rim is silvery sand regardless of the artwork.
+    vec2 texUv = aHome;
+    texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
+    vec3 tex = texture2D(uMap, clamp(texUv, 0.02, 0.98)).rgb;
+    vec3 proc = uColor * (0.35 + 0.7 * fbm(aHome * 3.0 + aRand * 7.0));
+    vec3 src = mix(proc, tex, uHasMap);
+    float lum = dot(src, vec3(0.299, 0.587, 0.114));
+    // 85% desaturate → then pull hard toward cool silver-white
+    vec3 col = mix(vec3(lum), src, 0.3);
+    col = mix(col, vec3(0.80, 0.83, 0.92), 0.45);
+    col = min(col * (0.42 + uHighs * 0.15 + max(rippleSum, 0.0) * 0.2), vec3(0.7)); // faint, capped low
+
+    float att = 300.0 / max(1.0, -mv.z);
+    float size = mix(0.5, 1.9, wildness * 0.6 + 0.4 * lum);
+    gl_PointSize = clamp(size * att * uPixelRatio * (0.6 + 0.4 * formT), 0.5, 7.0);
+
+    vColor = col;
+    // bell-shaped density across the widened band [e 0.6..1.35]: sparse where
+    // the image is still solid, densest through the dissolve zone, feathering
+    // out to the plume tips. Contour makes spikes denser, hollows sparser — so
+    // the cloud's own outline is ragged too.
+    float profile = smoothstep(0.0, 0.25, aEdge) * (1.0 - 0.9 * smoothstep(0.45, 1.0, aEdge));
+    profile *= clamp(1.0 + contour * 1.3, 0.55, 1.5);
+    vAlpha = uOpacity * profile * (0.3 + 0.7 * formT) * 0.5;
   }
 `;
 
 const RIM_FRAG = /* glsl */ `
-  uniform vec3 uColor;
-  uniform float uOpacity;
-  varying float vTwinkle;
-  varying float vCore;
+  varying vec3 vColor;
+  varying float vAlpha;
   void main() {
     vec2 c = gl_PointCoord - 0.5;
-    float d = length(c);
-    float a = smoothstep(0.5, 0.06, d);
-    vec3 col = mix(uColor, vec3(1.0), 0.35 + vCore * 0.65);
-    gl_FragColor = vec4(col, a * vTwinkle * uOpacity);
+    float d2 = dot(c, c);
+    float a = exp(-d2 * 11.0) - 0.012;
+    if (a <= 0.0) discard;
+    gl_FragColor = vec4(vColor, a * vAlpha);
   }
 `;
 
@@ -188,32 +270,31 @@ export interface AudioLevels {
 
 export class TimeMirror {
   public group: THREE.Group;
-  private mesh: THREE.Mesh;
-  private mirrorMat: THREE.ShaderMaterial;
+  public mirrorMat: THREE.ShaderMaterial; // the plane material (uHasMap read by dev/QA)
+  private plane: THREE.Mesh;
   private rim: THREE.Points;
   private rimMat: THREE.ShaderMaterial;
+  private hit: THREE.Mesh;
   private halo: THREE.Sprite;
   private ripples: Float32Array;
   private rippleIndex = 0;
   private fallbackTex: THREE.Texture;
-  private openTween: gsap.core.Tween | null = null;
   public isOpen = false;
 
   constructor(haloTexture: THREE.Texture) {
     this.group = new THREE.Group();
     this.group.visible = false;
 
-    // 1x1 black fallback so the sampler is always valid
-    const black = new Uint8Array([4, 6, 14, 255]);
-    this.fallbackTex = new THREE.DataTexture(black, 1, 1, THREE.RGBAFormat);
+    const dark = new Uint8Array([10, 10, 16, 255]);
+    this.fallbackTex = new THREE.DataTexture(dark, 1, 1, THREE.RGBAFormat);
     this.fallbackTex.needsUpdate = true;
 
     this.ripples = new Float32Array(MAX_RIPPLES * 4);
 
-    // --- Lens plane ---
+    // ---- layer 1: image plane ----
     this.mirrorMat = new THREE.ShaderMaterial({
-      vertexShader: MIRROR_VERT,
-      fragmentShader: MIRROR_FRAG,
+      vertexShader: PLANE_VERT,
+      fragmentShader: PLANE_FRAG,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
@@ -221,44 +302,47 @@ export class TimeMirror {
         uMap: { value: this.fallbackTex },
         uHasMap: { value: 0 },
         uTime: { value: 0 },
-        uAspect: { value: 26 / 36 },
-        uColor: { value: new THREE.Color('#8B5CF6') },
+        uAspect: { value: PLANE_W / PLANE_H },
+        uColor: { value: new THREE.Color('#8d85c6') },
         uBass: { value: 0 },
-        uMids: { value: 0 },
         uHighs: { value: 0 },
-        uOpacity: { value: 1 },
+        uOpacity: { value: 0 },
+        uForm: { value: 0 },
         uRipples: { value: this.ripples },
       },
     });
-    // Plane sized to give a vertical oval: rim rx/ry above assume half extents 13 x 18
-    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(26, 36), this.mirrorMat);
-    this.mesh.renderOrder = 20;
-    this.group.add(this.mesh);
+    this.plane = new THREE.Mesh(new THREE.PlaneGeometry(PLANE_W, PLANE_H), this.mirrorMat);
+    this.plane.renderOrder = 20;
+    this.group.add(this.plane);
 
-    // --- Rim stardust ---
-    const COUNT = 1300;
-    const geo = new THREE.BufferGeometry();
-    const angle = new Float32Array(COUNT);
-    const radial = new Float32Array(COUNT);
-    const size = new Float32Array(COUNT);
-    const speed = new Float32Array(COUNT);
-    const phase = new Float32Array(COUNT);
-    for (let i = 0; i < COUNT; i++) {
-      angle[i] = Math.random() * Math.PI * 2;
-      // Gaussian-ish spread hugging the rim, drifting slightly outward
-      const g = (Math.random() + Math.random() + Math.random()) / 3 - 0.5;
-      radial[i] = g * 4.4 + 0.8;
-      size[i] = Math.random() * 1.5 + 0.35;
-      speed[i] = (Math.random() * 0.16 + 0.03) * (Math.random() > 0.5 ? 1 : -1);
-      phase[i] = Math.random() * Math.PI * 2;
+    // ---- layer 2: rim particle band, WIDE (e ∈ [0.62, 1.35]) ----
+    // overlaps the image's dissolve zone (grains take over as the image fades)
+    // and feathers far out into plumes. Density profile keeps it a soft glow.
+    const GRID_W = 108;
+    const GRID_H = 146;
+    const homes: number[] = [];
+    const rands: number[] = [];
+    const edges: number[] = [];
+    for (let gy = 0; gy < GRID_H; gy++) {
+      for (let gx = 0; gx < GRID_W; gx++) {
+        const u = (gx + 0.5) / GRID_W + (Math.random() - 0.5) * (0.8 / GRID_W);
+        const v = (gy + 0.5) / GRID_H + (Math.random() - 0.5) * (0.8 / GRID_H);
+        const ex = (u - 0.5) / 0.33;
+        const ey = (v - 0.5) / 0.43;
+        const e = Math.sqrt(ex * ex + ey * ey);
+        if (e < 0.62 || e > 1.35) continue;
+        homes.push(u, v);
+        rands.push(Math.random());
+        edges.push(THREE.MathUtils.clamp((e - 0.62) / (1.35 - 0.62), 0, 1));
+      }
     }
+    const COUNT = rands.length;
+    const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
-    geo.setAttribute('aAngle', new THREE.BufferAttribute(angle, 1));
-    geo.setAttribute('aRadial', new THREE.BufferAttribute(radial, 1));
-    geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
-    geo.setAttribute('aSpeed', new THREE.BufferAttribute(speed, 1));
-    geo.setAttribute('aPhase', new THREE.BufferAttribute(phase, 1));
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 40);
+    geo.setAttribute('aHome', new THREE.BufferAttribute(new Float32Array(homes), 2));
+    geo.setAttribute('aRand', new THREE.BufferAttribute(new Float32Array(rands), 1));
+    geo.setAttribute('aEdge', new THREE.BufferAttribute(new Float32Array(edges), 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
 
     this.rimMat = new THREE.ShaderMaterial({
       vertexShader: RIM_VERT,
@@ -267,37 +351,48 @@ export class TimeMirror {
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       uniforms: {
+        uMap: { value: this.fallbackTex },
+        uHasMap: { value: 0 },
         uTime: { value: 0 },
+        uForm: { value: 0 },
+        uOpacity: { value: 0 },
         uBass: { value: 0 },
         uHighs: { value: 0 },
+        uColor: { value: new THREE.Color('#8d85c6') },
+        uRipples: { value: this.ripples }, // shared with the plane — one set of waves
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-        uColor: { value: new THREE.Color('#8B5CF6') },
-        uOpacity: { value: 1 },
+        uAspect: { value: PLANE_W / PLANE_H },
       },
     });
     this.rim = new THREE.Points(geo, this.rimMat);
     this.rim.renderOrder = 21;
     this.group.add(this.rim);
 
-    // --- Soft halo behind the lens ---
+    // pointer raycast plane (slightly oversized to catch the rim band)
+    this.hit = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLANE_W * 1.2, PLANE_H * 1.2),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+    this.group.add(this.hit);
+
+    // soft halo behind everything — faint and cool, not a theme-color backlight
     this.halo = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: haloTexture,
-        color: new THREE.Color('#8B5CF6'),
+        color: new THREE.Color('#6b7290'),
         transparent: true,
-        opacity: 0.14,
+        opacity: 0.06,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
     );
-    this.halo.scale.setScalar(88);
+    this.halo.scale.setScalar(80);
     this.halo.renderOrder = 19;
     this.group.add(this.halo);
   }
 
-  /** Raycast target for pointer ripples. */
   get hitMesh(): THREE.Mesh {
-    return this.mesh;
+    return this.hit;
   }
 
   open(position: THREE.Vector3, color: string) {
@@ -307,75 +402,88 @@ export class TimeMirror {
     (this.halo.material as THREE.SpriteMaterial).color.set(color);
     this.ripples.fill(0);
     this.group.visible = true;
+    this.group.scale.setScalar(1);
     this.isOpen = true;
 
-    this.openTween?.kill();
-    this.group.scale.setScalar(0.001);
-    this.openTween = gsap.to(this.group.scale, {
-      x: 1, y: 1, z: 1,
-      duration: 1.35,
-      ease: 'elastic.out(1, 0.62)',
-    });
-    gsap.fromTo(this.mirrorMat.uniforms.uOpacity, { value: 0 }, { value: 1, duration: 0.6, ease: 'power2.out' });
-    gsap.fromTo(this.rimMat.uniforms.uOpacity, { value: 0 }, { value: 1, duration: 0.9, ease: 'power2.out' });
+    const pm = this.mirrorMat.uniforms;
+    const rm = this.rimMat.uniforms;
+    gsap.killTweensOf([pm.uForm, pm.uOpacity, rm.uForm, rm.uOpacity]);
+    // grains assemble first, then the image develops from the center outward
+    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 1.7, ease: 'expo.out' });
+    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.6, ease: 'power2.out' });
+    gsap.fromTo(pm.uForm, { value: 0 }, { value: 1, duration: 1.9, ease: 'power2.inOut', delay: 0.45 });
+    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.7, ease: 'power2.out', delay: 0.35 });
+    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 1.4 });
   }
 
   close(onDone?: () => void) {
     if (!this.isOpen) { onDone?.(); return; }
     this.isOpen = false;
-    this.openTween?.kill();
-    this.openTween = gsap.to(this.group.scale, {
-      x: 0.001, y: 0.001, z: 0.001,
-      duration: 0.45,
-      ease: 'power3.in',
+    const pm = this.mirrorMat.uniforms;
+    const rm = this.rimMat.uniforms;
+    gsap.killTweensOf([pm.uForm, pm.uOpacity, rm.uForm, rm.uOpacity]);
+    gsap.to(pm.uForm, { value: 0, duration: 0.75, ease: 'power2.in' });
+    gsap.to(rm.uForm, { value: 0, duration: 0.9, ease: 'power2.in' });
+    gsap.to(this.halo.material as THREE.SpriteMaterial, { opacity: 0, duration: 0.5 });
+    gsap.to([pm.uOpacity, rm.uOpacity], {
+      value: 0,
+      duration: 0.8,
+      ease: 'power2.in',
       onComplete: () => {
         this.group.visible = false;
         this.setTexture(null);
         onDone?.();
       },
     });
-    gsap.to(this.mirrorMat.uniforms.uOpacity, { value: 0, duration: 0.4, ease: 'power2.in' });
-    gsap.to(this.rimMat.uniforms.uOpacity, { value: 0, duration: 0.35, ease: 'power2.in' });
   }
 
   setTexture(tex: THREE.Texture | null) {
+    const target = tex || this.fallbackTex;
+    this.mirrorMat.uniforms.uMap.value = target;
+    this.rimMat.uniforms.uMap.value = target;
     if (tex) {
-      this.mirrorMat.uniforms.uMap.value = tex;
-      gsap.to(this.mirrorMat.uniforms.uHasMap, { value: 1, duration: 0.9, ease: 'power2.inOut' });
+      gsap.to([this.mirrorMat.uniforms.uHasMap, this.rimMat.uniforms.uHasMap], {
+        value: 1, duration: 1.0, ease: 'power2.inOut',
+      });
     } else {
-      this.mirrorMat.uniforms.uMap.value = this.fallbackTex;
       this.mirrorMat.uniforms.uHasMap.value = 0;
+      this.rimMat.uniforms.uHasMap.value = 0;
     }
   }
 
-  /** uv in [0,1] on the lens plane. */
+  /**
+   * Spawn a ripple at uv (0..1). The single wave rolls across BOTH the image
+   * plane and the rim particles — one soft, unified reaction, no repulsion.
+   */
   addRipple(u: number, v: number, time: number, strength = 1) {
     const i = this.rippleIndex * 4;
     this.ripples[i] = u;
     this.ripples[i + 1] = v;
     this.ripples[i + 2] = time;
-    this.ripples[i + 3] = strength;
+    this.ripples[i + 3] = strength * 0.8;
     this.rippleIndex = (this.rippleIndex + 1) % MAX_RIPPLES;
   }
 
   update(time: number, audio: AudioLevels, camera: THREE.Camera) {
     if (!this.group.visible) return;
-    this.mirrorMat.uniforms.uTime.value = time;
-    this.mirrorMat.uniforms.uBass.value = audio.bass;
-    this.mirrorMat.uniforms.uMids.value = audio.mids;
-    this.mirrorMat.uniforms.uHighs.value = audio.highs;
-    this.rimMat.uniforms.uTime.value = time;
-    this.rimMat.uniforms.uBass.value = audio.bass;
-    this.rimMat.uniforms.uHighs.value = audio.highs;
-    // Billboard toward the camera
+    const pm = this.mirrorMat.uniforms;
+    const rm = this.rimMat.uniforms;
+    pm.uTime.value = time;
+    pm.uBass.value = audio.bass;
+    pm.uHighs.value = audio.highs;
+    rm.uTime.value = time;
+    rm.uBass.value = audio.bass;
+    rm.uHighs.value = audio.highs;
     this.group.quaternion.copy((camera as THREE.PerspectiveCamera).quaternion);
   }
 
   dispose() {
-    this.mesh.geometry.dispose();
+    this.plane.geometry.dispose();
     this.mirrorMat.dispose();
     this.rim.geometry.dispose();
     this.rimMat.dispose();
+    this.hit.geometry.dispose();
+    (this.hit.material as THREE.Material).dispose();
     (this.halo.material as THREE.SpriteMaterial).dispose();
     this.fallbackTex.dispose();
   }

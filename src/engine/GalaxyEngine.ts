@@ -17,7 +17,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { gsap } from 'gsap';
-import { MusicNode, ViewDimension } from '../types';
+import { MusicNode } from '../types';
 import { TimeMirror, AudioLevels } from './TimeMirror';
 import { CORE_WHITE, SPACE_BG, paletteFor, NebulaPalette } from './palette';
 import musicSynth from '../synth';
@@ -174,7 +174,10 @@ const SMOKE_VERT = /* glsl */ `
     float att = 400.0 / max(1.0, -mv.z);
     gl_PointSize = clamp(aSize * att * uPixelRatio * (1.0 + uFocus * 0.3), 2.0, 460.0);
     vColor = aColor;
-    vAlpha = aAlpha * (0.85 + 0.15 * sin(uSpinTime * 0.7 + aPhase * 9.0));
+    // mist is a close-up detail: distant galaxies read as crisp stars, so the
+    // additive haze fades with camera distance and the void stays black
+    float distFade = mix(1.0, 0.1, smoothstep(420.0, 950.0, -mv.z));
+    vAlpha = aAlpha * distFade * (0.85 + 0.15 * sin(uSpinTime * 0.7 + aPhase * 9.0));
     vRot = aPhase * 6.2831 + uSpinTime * aRotSpeed;
     vVariant = aVariant;
     // view-space direction from this puff toward the core (group origin)
@@ -223,6 +226,7 @@ const MISTDISK_VERT = /* glsl */ `
   uniform float uFocus;
   varying vec2 vUv;
   varying float vFacing;
+  varying float vDist;
   void main() {
     vUv = uv;
     vec3 pos = position;
@@ -231,6 +235,7 @@ const MISTDISK_VERT = /* glsl */ `
     vec3 worldNormal = normalize(mat3(modelMatrix) * vec3(0.0, 0.0, 1.0));
     vec3 viewDir = normalize(cameraPosition - wp.xyz);
     vFacing = abs(dot(worldNormal, viewDir));
+    vDist = distance(cameraPosition, wp.xyz);
     gl_Position = projectionMatrix * viewMatrix * wp;
   }
 `;
@@ -247,6 +252,7 @@ const MISTDISK_FRAG = /* glsl */ `
   uniform vec3 uAccent;
   varying vec2 vUv;
   varying float vFacing;
+  varying float vDist;
 
   float hash21(vec2 p) {
     p = fract(p * vec2(234.34, 435.345));
@@ -287,15 +293,16 @@ const MISTDISK_FRAG = /* glsl */ `
     float wRigid = 1.6 / (sqrt(0.55 * uRadius) + 2.0);
     float armCenter = uArmPhase + t * uTurns + uSpinTime * wRigid;
 
-    // two arms: bright ridge every PI
+    // two arms: bright ridge every PI. Narrow band — the gaps between arms
+    // must stay BLACK (that contrast is where the depth lives)
     float d = theta - armCenter;
     float armWave = cos(2.0 * d);
-    // noise-carved gas: wide soft band + marbled detail
+    // noise-carved gas: arm band + marbled detail
     float n1 = fbm(vec2(theta * 1.6 + uSeed, rn * 5.5 - uSeed));
     float n2 = fbm(vec2(theta * 4.0 - uSeed * 2.0, rn * 11.0 + uSeed) + uSpinTime * 0.015);
-    float arm = smoothstep(-0.15, 0.85, armWave) * (0.45 + 0.55 * n1);
+    float arm = smoothstep(0.18, 0.95, armWave) * (0.45 + 0.55 * n1);
 
-    float bulge = smoothstep(0.42, 0.0, rn) * (0.55 + 0.45 * n1);
+    float bulge = smoothstep(0.3, 0.0, rn) * (0.55 + 0.45 * n1);
     float body = arm * smoothstep(1.0, 0.2, rn) + bulge;
     body *= 0.55 + 0.65 * n2; // internal marbling
 
@@ -306,6 +313,8 @@ const MISTDISK_FRAG = /* glsl */ `
     float alpha = body * uOpacity * smoothstep(1.0, 0.62, rn);
     // grazing angles: the flat disk must never read as a paper cut-out
     alpha *= smoothstep(0.10, 0.42, vFacing);
+    // close-up detail only — fades out toward overview distance
+    alpha *= mix(1.0, 0.08, smoothstep(420.0, 950.0, vDist));
     if (alpha < 0.004) discard;
     gl_FragColor = vec4(col * (0.8 + 0.5 * body), alpha);
   }
@@ -354,8 +363,9 @@ function makeGlowTexture(): THREE.Texture {
       const dx = (x - SIZE / 2) / (SIZE / 2);
       const dy = (y - SIZE / 2) / (SIZE / 2);
       const d2 = dx * dx + dy * dy;
-      // twin gaussian: hot core + wide soft veil
-      const a = Math.exp(-d2 * 18) * 0.85 + Math.exp(-d2 * 3.2) * 0.18;
+      // twin gaussian: hot core + wide soft veil (tail kept quiet — 25 cores
+      // overlap at overview distance and their tails sum into grey)
+      const a = Math.exp(-d2 * 18) * 0.85 + Math.exp(-d2 * 3.6) * 0.1;
       const i = (y * SIZE + x) * 4;
       img.data[i] = 255;
       img.data[i + 1] = 255;
@@ -547,7 +557,6 @@ export class GalaxyEngine {
   private nebulas = new Map<string, NebulaEntry>();
   private planets = new Map<string, SongStarEntry>();
   private songHostId: string | null = null; // nebula currently carrying song stars
-  private dimensionDecor: THREE.Group | null = null;
   private compareLink: THREE.Mesh | null = null;
   private mirror!: TimeMirror;
   private glowTex!: THREE.Texture;
@@ -559,7 +568,6 @@ export class GalaxyEngine {
   private focusedArtistId: string | null = null;
   private selectedSongId: string | null = null;
   private selectedSongIdB: string | null = null;
-  private dimension: ViewDimension = 'all';
   private searchQuery = '';
   private disposed = false;
 
@@ -609,7 +617,10 @@ export class GalaxyEngine {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(w, h);
-    this.renderer.setClearColor(new THREE.Color(SPACE_BG), 1);
+    // Pure black clear: the post chain re-encodes the clear color (grey-lifting
+    // any non-zero value), and black survives any encoding. The subtle blue
+    // air of SPACE_BG lives in the CSS backdrop + vignette instead.
+    this.renderer.setClearColor(0x000000, 1);
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
@@ -618,9 +629,9 @@ export class GalaxyEngine {
 
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    // High threshold: only additive-stacked highlights (nebula cores, rim sparks)
-    // bloom — album artwork inside the mirror must never blow out.
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 1.15, 0.72, 0.78);
+    // High threshold + tight radius: only true highlights bloom, and their
+    // halo stays close — a wide radius smears 25 galaxies into a grey shroud.
+    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 1.0, 0.45, 0.82);
     this.composer.addPass(this.bloom);
     this.composer.addPass(new OutputPass());
   }
@@ -671,6 +682,115 @@ export class GalaxyEngine {
     stars.name = 'starfield';
     this.scene.add(stars);
 
+    // --- near-field drifting stars: parallax layer sharing the galaxies' space ---
+    const NEAR_COUNT = 1100;
+    const nPos = new Float32Array(NEAR_COUNT * 3);
+    const nSize = new Float32Array(NEAR_COUNT);
+    const nPhase = new Float32Array(NEAR_COUNT);
+    const nColor = new Float32Array(NEAR_COUNT * 3);
+    for (let i = 0; i < NEAR_COUNT; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(Math.random() * 2 - 1);
+      const r = 350 + Math.pow(Math.random(), 0.7) * 1100;
+      nPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      nPos[i * 3 + 1] = r * Math.cos(phi) * 0.7;
+      nPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+      nSize[i] = Math.random() * 1.2 + 0.25;
+      nPhase[i] = Math.random() * Math.PI * 2;
+      const c = neutrals[(Math.random() * neutrals.length) | 0];
+      const dim = 0.5 + Math.random() * 0.4;
+      nColor[i * 3] = c.r * dim; nColor[i * 3 + 1] = c.g * dim; nColor[i * 3 + 2] = c.b * dim;
+    }
+    const nearGeo = new THREE.BufferGeometry();
+    nearGeo.setAttribute('position', new THREE.BufferAttribute(nPos, 3));
+    nearGeo.setAttribute('aSize', new THREE.BufferAttribute(nSize, 1));
+    nearGeo.setAttribute('aPhase', new THREE.BufferAttribute(nPhase, 1));
+    nearGeo.setAttribute('aColor', new THREE.BufferAttribute(nColor, 3));
+    const nearStars = new THREE.Points(nearGeo, starMat);
+    this.scene.add(nearStars);
+
+    // --- distant Milky Way band: a tilted arc of fine grain across the deep sky ---
+    const MW_COUNT = 5200;
+    const mwPos = new Float32Array(MW_COUNT * 3);
+    const mwSize = new Float32Array(MW_COUNT);
+    const mwPhase = new Float32Array(MW_COUNT);
+    const mwColor = new Float32Array(MW_COUNT * 3);
+    // band plane basis: tilted ~40° so the arc sweeps diagonally behind the scene
+    const bandNormal = new THREE.Vector3(0.55, 0.78, 0.3).normalize();
+    const bandU = new THREE.Vector3(1, 0, 0).cross(bandNormal).normalize();
+    const bandV = new THREE.Vector3().crossVectors(bandNormal, bandU).normalize();
+    const gaussRnd = () => Math.random() + Math.random() + Math.random() - 1.5;
+    const mwTints = ['#e8e0d2', '#d5cfc4', '#c6c4bd', '#b8bcc4'].map((c) => new THREE.Color(c));
+    for (let i = 0; i < MW_COUNT; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const rr = 2150 + gaussRnd() * 420;
+      const p = new THREE.Vector3()
+        .addScaledVector(bandU, Math.cos(a) * rr)
+        .addScaledVector(bandV, Math.sin(a) * rr)
+        .addScaledVector(bandNormal, gaussRnd() * 240);
+      mwPos[i * 3] = p.x; mwPos[i * 3 + 1] = p.y; mwPos[i * 3 + 2] = p.z;
+      mwSize[i] = Math.random() * 1.1 + 0.2;
+      mwPhase[i] = Math.random() * Math.PI * 2;
+      const c = mwTints[(Math.random() * mwTints.length) | 0];
+      const dim = 0.3 + Math.random() * 0.45; // a whisper — never competes with artists
+      mwColor[i * 3] = c.r * dim; mwColor[i * 3 + 1] = c.g * dim; mwColor[i * 3 + 2] = c.b * dim;
+    }
+    const mwGeo = new THREE.BufferGeometry();
+    mwGeo.setAttribute('position', new THREE.BufferAttribute(mwPos, 3));
+    mwGeo.setAttribute('aSize', new THREE.BufferAttribute(mwSize, 1));
+    mwGeo.setAttribute('aPhase', new THREE.BufferAttribute(mwPhase, 1));
+    mwGeo.setAttribute('aColor', new THREE.BufferAttribute(mwColor, 3));
+    const milkyWay = new THREE.Points(mwGeo, starMat);
+    this.scene.add(milkyWay);
+    // faint gas smudges along the band give the grain its "river" continuity
+    for (let i = 0; i < 14; i++) {
+      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.3;
+      const rr = 2150 + gaussRnd() * 300;
+      const smudge = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: this.smokeTex,
+          color: new THREE.Color('#b9b4ab'),
+          transparent: true,
+          opacity: 0.022 + Math.random() * 0.016,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          rotation: Math.random() * Math.PI * 2,
+        })
+      );
+      smudge.position
+        .set(0, 0, 0)
+        .addScaledVector(bandU, Math.cos(a) * rr)
+        .addScaledVector(bandV, Math.sin(a) * rr)
+        .addScaledVector(bandNormal, gaussRnd() * 160);
+      smudge.scale.setScalar(420 + Math.random() * 380);
+      this.scene.add(smudge);
+    }
+
+    // --- remote background galaxies: tiny stretched glints in the far dark ---
+    for (let i = 0; i < 11; i++) {
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(Math.random() * 2 - 1);
+      const r = 1900 + Math.random() * 800;
+      const glint = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: this.glowTex,
+          color: new THREE.Color(Math.random() > 0.5 ? '#d8d0c2' : '#c2c8d5'),
+          transparent: true,
+          opacity: 0.045 + Math.random() * 0.05,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          rotation: Math.random() * Math.PI,
+        })
+      );
+      glint.position.set(
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi),
+        r * Math.sin(phi) * Math.sin(theta)
+      );
+      glint.scale.set(24 + Math.random() * 34, (24 + Math.random() * 34) * (0.3 + Math.random() * 0.35), 1);
+      this.scene.add(glint);
+    }
+
     // --- out-of-focus bokeh dust (near-field depth, Penderecki style) ---
     const BOKEH_COUNT = 42;
     const bPos = new Float32Array(BOKEH_COUNT * 3);
@@ -695,7 +815,7 @@ export class GalaxyEngine {
         map: this.glowTex,
         size: 26,
         transparent: true,
-        opacity: 0.10,
+        opacity: 0.06,
         vertexColors: true,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
@@ -704,35 +824,11 @@ export class GalaxyEngine {
     );
     this.scene.add(bokeh);
 
-    // --- faint galactic-center light (whispered; the darkness reads first) ---
-    const centerGlow = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: this.glowTex,
-        color: new THREE.Color('#3a3550'),
-        transparent: true,
-        opacity: 0.05,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-    );
-    centerGlow.scale.setScalar(1500);
-    this.scene.add(centerGlow);
-    const centerGlow2 = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: this.glowTex,
-        color: new THREE.Color('#28304a'),
-        transparent: true,
-        opacity: 0.05,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-    );
-    centerGlow2.scale.setScalar(2400);
-    centerGlow2.position.set(300, -80, -200);
-    this.scene.add(centerGlow2);
+    // (no full-screen center glow — the void must stay void; depth comes
+    // from the galaxies themselves)
 
     // --- artist nebulas ---
-    const layout = this.computeLayout(this.dimension);
+    const layout = this.computeLayout();
     this.artists.forEach((def) => {
       const p = layout[def.id];
       const entry = this.buildNebula(def);
@@ -994,31 +1090,33 @@ export class GalaxyEngine {
         map: this.glowTex,
         color: cArm,
         transparent: true,
-        opacity: 0.10,
+        opacity: 0.055,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
     );
-    veil.scale.setScalar(R * 2.3);
+    veil.scale.setScalar(R * 1.9);
     group.add(veil);
 
-    // invisible ray target
+    // invisible ray target — a flattened ellipsoid hugging the visible disk,
+    // so pointing anywhere at the galaxy (not just its core) registers
     const hit = new THREE.Mesh(
-      new THREE.SphereGeometry(R * 0.55, 8, 8),
+      new THREE.SphereGeometry(R * 0.95, 12, 8),
       new THREE.MeshBasicMaterial({ visible: false })
     );
+    hit.scale.y = 0.35;
     hit.userData = { type: 'artist', id: def.id };
     group.add(hit);
 
-    // DOM label — quiet, wide-tracked editorial caption
+    // DOM label — serif editorial caption, readable over bright mist
     const label = document.createElement('div');
     label.className =
       'galaxy-label absolute pointer-events-none select-none text-center will-change-transform';
     const labelName = document.createElement('div');
-    labelName.className = 'font-sans font-medium text-[10.5px] text-slate-200 uppercase tracking-[0.22em] whitespace-nowrap';
+    labelName.className = 'font-serif font-semibold text-[12.5px] text-[#e8e0d2] uppercase tracking-[0.2em] whitespace-nowrap';
     labelName.textContent = def.chineseName ? `${def.name} · ${def.chineseName}` : def.name;
     const labelSub = document.createElement('div');
-    labelSub.className = 'font-mono text-[8.5px] text-slate-500 tracking-[0.14em] whitespace-nowrap mt-1';
+    labelSub.className = 'font-mono text-[8.5px] text-[#e8e0d2]/50 tracking-[0.16em] whitespace-nowrap mt-1';
     labelSub.textContent = `${def.songs.length} TRACKS`;
     label.appendChild(labelName);
     label.appendChild(labelSub);
@@ -1040,69 +1138,21 @@ export class GalaxyEngine {
 
   // ------------------------------------------------ layouts
 
-  private computeLayout(dim: ViewDimension): Record<string, THREE.Vector3> {
+  /** Double-arm spiral layout — the one and only constellation arrangement. */
+  private computeLayout(): Record<string, THREE.Vector3> {
     const out: Record<string, THREE.Vector3> = {};
     const N = this.artists.length;
-
-    if (dim === 'region') {
-      const centers: Record<string, THREE.Vector3> = {
-        region_cn: new THREE.Vector3(-400, -20, -140),
-        region_kr: new THREE.Vector3(400, 20, 140),
-        region_us_eu: new THREE.Vector3(0, 60, 420),
-      };
-      const groups = new Map<string, ArtistDef[]>();
-      this.artists.forEach((a) => {
-        const k = a.region || 'region_kr';
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k)!.push(a);
-      });
-      groups.forEach((list, key) => {
-        const c = centers[key] || centers.region_kr;
-        list.forEach((a, i) => {
-          const ang = (i / list.length) * Math.PI * 2 + i * 0.13;
-          const dist = 120 + (i % 2) * 42;
-          out[a.id] = new THREE.Vector3(
-            c.x + Math.cos(ang) * dist,
-            c.y + Math.sin(i * 2.1) * 26,
-            c.z + Math.sin(ang) * dist
-          );
-        });
-      });
-    } else if (dim === 'genre') {
-      const radii: Record<string, number> = {
-        genre_pop: 250, genre_rnb: 360, genre_hiphop: 460, genre_jazz: 560, genre_electronic: 660,
-      };
-      const groups = new Map<string, ArtistDef[]>();
-      this.artists.forEach((a) => {
-        const k = a.genre || 'genre_pop';
-        if (!groups.has(k)) groups.set(k, []);
-        groups.get(k)!.push(a);
-      });
-      groups.forEach((list, key) => {
-        const r = radii[key] || 320;
-        list.forEach((a, i) => {
-          const ang = (i / list.length) * Math.PI * 2 + i * 0.07;
-          out[a.id] = new THREE.Vector3(
-            Math.cos(ang) * r,
-            Math.sin(i * 2.8) * 34,
-            Math.sin(ang) * r
-          );
-        });
-      });
-    } else {
-      // double-arm spiral galaxy — spread wide with real vertical interleaving
-      this.artists.forEach((a, idx) => {
-        const arm = idx % 2;
-        const t = idx / N;
-        const ang = t * Math.PI * 3.2 + arm * Math.PI;
-        const dist = 260 + t * 800;
-        out[a.id] = new THREE.Vector3(
-          Math.cos(ang) * dist,
-          Math.sin(idx * 3.7) * 95,
-          Math.sin(ang) * dist
-        );
-      });
-    }
+    this.artists.forEach((a, idx) => {
+      const arm = idx % 2;
+      const t = idx / N;
+      const ang = t * Math.PI * 3.2 + arm * Math.PI;
+      const dist = 260 + t * 800;
+      out[a.id] = new THREE.Vector3(
+        Math.cos(ang) * dist,
+        Math.sin(idx * 3.7) * 95,
+        Math.sin(ang) * dist
+      );
+    });
     return out;
   }
 
@@ -1150,7 +1200,7 @@ export class GalaxyEngine {
       nebula.group.add(star); // local coords — inherits the disk tilt
 
       const hit = new THREE.Mesh(
-        new THREE.SphereGeometry(7.5, 6, 6),
+        new THREE.SphereGeometry(12, 8, 8),
         new THREE.MeshBasicMaterial({ visible: false })
       );
       hit.userData = { type: 'song', id: song.id };
@@ -1158,7 +1208,7 @@ export class GalaxyEngine {
 
       const label = document.createElement('div');
       label.className = 'galaxy-label absolute pointer-events-none select-none will-change-transform';
-      label.innerHTML = `<div class="font-sans text-[9.5px] text-slate-300 tracking-[0.12em] whitespace-nowrap">${song.name}</div>`;
+      label.innerHTML = `<div class="font-sans text-[11px] text-[#ede7db] tracking-[0.1em] whitespace-nowrap">${song.name}</div>`;
       label.style.opacity = '0';
       this.labelLayer.appendChild(label);
 
@@ -1277,7 +1327,7 @@ export class GalaxyEngine {
 
     const bloomPeak = opts.bloomPeak ?? 1.9;
     tl.to(this.bloom, { strength: bloomPeak, duration: duration * 0.45, ease: 'power2.in' }, 0);
-    tl.to(this.bloom, { strength: 0.85, duration: duration * 0.55, ease: 'power2.out' }, duration * 0.45);
+    tl.to(this.bloom, { strength: 1.0, duration: duration * 0.55, ease: 'power2.out' }, duration * 0.45);
   }
 
   // ------------------------------------------------ public navigation API
@@ -1404,20 +1454,30 @@ export class GalaxyEngine {
       .addScaledVector(normal, SONG_DISTANCE * 0.88)
       .addScaledVector(outward, SONG_DISTANCE * 0.42);
 
-    // dim the world around the mirror (core dimming is eased in the frame loop)
-    gsap.to(nebula.cloudMat.uniforms.uOpacity, { value: 0.2, duration: 1.2 });
-    gsap.to(nebula.gasMat.uniforms.uOpacity, { value: 0.18, duration: 1.2 });
-    gsap.to(nebula.dustMat.uniforms.uOpacity, { value: 0.35, duration: 1.2 });
-    gsap.to(nebula.mistMat.uniforms.uOpacity, { value: 0.07, duration: 1.2 });
-    nebula.coreDimTarget = 0.12;
-    gsap.to(nebula.veil.material as THREE.SpriteMaterial, { opacity: 0.03, duration: 1.2 });
+    // dim the world hard around the mirror — it should hang in a black abyss,
+    // the only light source in frame (core dimming eased in the frame loop).
+    // Even the host's own particle bulge is pushed near-black so nothing
+    // competes with the lens (the reference isolates it completely).
+    gsap.to(nebula.cloudMat.uniforms.uOpacity, { value: 0.05, duration: 1.2 });
+    gsap.to(nebula.gasMat.uniforms.uOpacity, { value: 0.03, duration: 1.2 });
+    gsap.to(nebula.dustMat.uniforms.uOpacity, { value: 0.08, duration: 1.2 });
+    gsap.to(nebula.mistMat.uniforms.uOpacity, { value: 0, duration: 1.2 });
+    nebula.coreDimTarget = 0.015; // near-black: the warm core must not glow beside the lens
+    // fade EVERY other galaxy down too — the reference isolates the lens in
+    // pure void; no bright neighbor should compete for the eye
+    this.nebulas.forEach((other, oid) => {
+      if (oid === artistId) return;
+      gsap.to(other.cloudMat.uniforms.uOpacity, { value: 0.05, duration: 1.2 });
+      gsap.to(other.gasMat.uniforms.uOpacity, { value: 0.03, duration: 1.2 });
+      other.coreDimTarget = 0.02;
+    });
     this.planets.forEach((p, pid) => {
       gsap.to(p.star.material as THREE.SpriteMaterial, { opacity: pid === node.id ? 1 : 0.2, duration: 1.0 });
     });
 
     this.flyTo(camEnd, starPos, {
       duration: 1.9,
-      bloomPeak: 1.5,
+      bloomPeak: 1.0, // no flash-white on arrival; the lens is meant to be dim
       onComplete: () => {
         // the star folds into the time lens (scale handled by the frame loop)
         const mirrorPos = new THREE.Vector3();
@@ -1493,8 +1553,14 @@ export class GalaxyEngine {
       gsap.to(nebula.gasMat.uniforms.uOpacity, { value: 1, duration: 1.0 });
       gsap.to(nebula.dustMat.uniforms.uOpacity, { value: 1, duration: 1.0 });
       gsap.to(nebula.mistMat.uniforms.uOpacity, { value: 0.27, duration: 1.0 });
-      nebula.coreDimTarget = 1;
-      gsap.to(nebula.veil.material as THREE.SpriteMaterial, { opacity: 0.10, duration: 1.2 });
+      nebula.coreDimTarget = 1; // veil recovers via the frame loop
+      // bring the other galaxies back up to their artist-mode (unfocused) glow
+      this.nebulas.forEach((other, oid) => {
+        if (oid === artistId) return;
+        gsap.to(other.cloudMat.uniforms.uOpacity, { value: 0.5, duration: 1.0 });
+        gsap.to(other.gasMat.uniforms.uOpacity, { value: 0.55, duration: 1.0 });
+        other.coreDimTarget = 1;
+      });
       this.setMode('artist');
       if (flyBack) {
         const center = nebula.group.position.clone();
@@ -1516,87 +1582,6 @@ export class GalaxyEngine {
 
   setMirrorTexture(tex: THREE.Texture | null) {
     this.mirror.setTexture(tex);
-  }
-
-  setDimension(dim: ViewDimension) {
-    if (dim === this.dimension) return;
-    this.dimension = dim;
-    if (this.mode !== 'overview') this.flyToOverview();
-    const layout = this.computeLayout(dim);
-    let i = 0;
-    this.nebulas.forEach((n, id) => {
-      const p = layout[id];
-      gsap.to(n.group.position, {
-        x: p.x, y: p.y, z: p.z,
-        duration: 1.8, ease: 'power3.inOut', delay: i * 0.02,
-      });
-      i++;
-    });
-    this.buildDimensionDecor(dim);
-  }
-
-  /** Visual anchors for clustered views: genre orbit rings / region sector glows. */
-  private buildDimensionDecor(dim: ViewDimension) {
-    if (this.dimensionDecor) {
-      this.dimensionDecor.traverse((o) => {
-        if (o instanceof THREE.Line) {
-          o.geometry.dispose();
-          (o.material as THREE.Material).dispose();
-        }
-        if (o instanceof THREE.Sprite) (o.material as THREE.Material).dispose();
-      });
-      this.scene.remove(this.dimensionDecor);
-      this.dimensionDecor = null;
-    }
-    if (dim === 'all') return;
-
-    const decor = new THREE.Group();
-    if (dim === 'genre') {
-      const rings = [
-        { r: 250, c: '#7cb3b5' }, { r: 360, c: '#8fa6c9' }, { r: 460, c: '#bd7f63' },
-        { r: 560, c: '#c9a06a' }, { r: 660, c: '#a3b08a' },
-      ];
-      rings.forEach(({ r, c }) => {
-        const segments = 160;
-        const pts = new Float32Array((segments + 1) * 3);
-        for (let i = 0; i <= segments; i++) {
-          const a = (i / segments) * Math.PI * 2;
-          pts[i * 3] = Math.cos(a) * r;
-          pts[i * 3 + 1] = 0;
-          pts[i * 3 + 2] = Math.sin(a) * r;
-        }
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(pts, 3));
-        const line = new THREE.Line(
-          geo,
-          new THREE.LineBasicMaterial({ color: new THREE.Color(c), transparent: true, opacity: 0.22 })
-        );
-        decor.add(line);
-      });
-    } else if (dim === 'region') {
-      const sectors = [
-        { p: new THREE.Vector3(-400, -20, -140), c: '#FF4A4A' },
-        { p: new THREE.Vector3(400, 20, 140), c: '#3B82F6' },
-        { p: new THREE.Vector3(0, 60, 420), c: '#A855F7' },
-      ];
-      sectors.forEach(({ p, c }) => {
-        const glow = new THREE.Sprite(
-          new THREE.SpriteMaterial({
-            map: this.glowTex,
-            color: new THREE.Color(c),
-            transparent: true,
-            opacity: 0.09,
-            blending: THREE.AdditiveBlending,
-            depthWrite: false,
-          })
-        );
-        glow.position.copy(p);
-        glow.scale.setScalar(620);
-        decor.add(glow);
-      });
-    }
-    this.scene.add(decor);
-    this.dimensionDecor = decor;
   }
 
   setSearch(q: string) {
@@ -1723,32 +1708,44 @@ export class GalaxyEngine {
     }
   };
 
-  private handleClick(shiftKey: boolean) {
+  /** Two-pass picking: song stars first, then the big galaxy ellipsoids —
+   *  otherwise the flattened disk hit-volume would swallow star clicks. */
+  private pickAtPointer(): { type: 'artist' | 'song'; id: string } | null {
     this.raycaster.setFromCamera(this.pointer, this.camera);
-    const targets: THREE.Object3D[] = [];
-    this.nebulas.forEach((n) => targets.push(n.hit));
-    this.planets.forEach((p) => targets.push(p.hit));
-    const hits = this.raycaster.intersectObjects(targets, false);
+    const songTargets: THREE.Object3D[] = [];
+    this.planets.forEach((p) => songTargets.push(p.hit));
+    if (songTargets.length) {
+      const songHits = this.raycaster.intersectObjects(songTargets, false);
+      if (songHits.length) return songHits[0].object.userData as { type: 'song'; id: string };
+    }
+    const artistTargets: THREE.Object3D[] = [];
+    this.nebulas.forEach((n) => artistTargets.push(n.hit));
+    const artistHits = this.raycaster.intersectObjects(artistTargets, false);
+    if (artistHits.length) return artistHits[0].object.userData as { type: 'artist'; id: string };
+    return null;
+  }
 
-    if (!hits.length) {
+  private handleClick(shiftKey: boolean) {
+    const picked = this.pickAtPointer();
+
+    if (!picked) {
       // empty space click while a mirror is open → back to the artist system
       if (this.mode === 'song') this.deselectSong(true);
       return;
     }
 
-    const data = hits[0].object.userData as { type: 'artist' | 'song'; id: string };
-    if (data.type === 'artist') {
-      if (data.id !== this.focusedArtistId) {
-        this.focusArtist(data.id); // enter or warp
+    if (picked.type === 'artist') {
+      if (picked.id !== this.focusedArtistId) {
+        this.focusArtist(picked.id); // enter or warp
       }
     } else {
-      const planet = this.planets.get(data.id);
+      const planet = this.planets.get(picked.id);
       if (!planet) return;
-      if (shiftKey && this.selectedSongId && this.selectedSongId !== data.id) {
+      if (shiftKey && this.selectedSongId && this.selectedSongId !== picked.id) {
         this.callbacks.onSelectSong(planet.node, true);
         return;
       }
-      if (data.id === this.selectedSongId) return;
+      if (picked.id === this.selectedSongId) return;
       // React round-trip drives engine.selectSong via the selectedNode prop
       this.callbacks.onSelectSong(planet.node, false);
     }
@@ -1820,18 +1817,11 @@ export class GalaxyEngine {
 
   private updateHover() {
     if (this.dragging || this.flying) return;
-    this.raycaster.setFromCamera(this.pointer, this.camera);
-    const targets: THREE.Object3D[] = [];
-    this.nebulas.forEach((n) => targets.push(n.hit));
-    this.planets.forEach((p) => targets.push(p.hit));
-    const hits = this.raycaster.intersectObjects(targets, false);
+    const d = this.pickAtPointer();
 
     let next: { type: 'artist' | 'song'; id: string } | null = null;
-    if (hits.length) {
-      const d = hits[0].object.userData as { type: 'artist' | 'song'; id: string };
-      // ignore hover on the focused artist's own core (nothing to do there)
-      if (!(d.type === 'artist' && d.id === this.focusedArtistId)) next = d;
-    }
+    // ignore hover on the focused artist's own disk (nothing to do there)
+    if (d && !(d.type === 'artist' && d.id === this.focusedArtistId)) next = d;
 
     const changed = next?.id !== this.hovered?.id || next?.type !== this.hovered?.type;
     if (changed) {
@@ -1905,7 +1895,7 @@ export class GalaxyEngine {
       let opacity = 0;
       if (this.screenPos.visible && camDist < 620) {
         if (this.mode === 'song') opacity = isSelected ? 0 : 0.12; // mirror carries its own title
-        else opacity = isHovered ? 1 : 0.72;
+        else opacity = isHovered ? 1 : 0.85;
       }
       p.label.style.opacity = String(opacity);
       const vAlign = p.labelBelow ? '15%' : '-100%';
@@ -1999,6 +1989,10 @@ export class GalaxyEngine {
       // per-galaxy paint order sorted by camera distance so dark dust from a
       // far galaxy never occludes a nearer one (all layers are depth-write-off)
       const camDist = this.camera.position.distanceTo(n.group.position);
+      // theme veil is a close-range whisper; at overview distance it would
+      // stack into the grey shroud the void must never have
+      const veilFade = 1 - 0.8 * THREE.MathUtils.smoothstep(camDist, 480, 950);
+      (n.veil.material as THREE.SpriteMaterial).opacity = 0.055 * veilFade * n.coreDim;
       const base = -camDist;
       n.mist.renderOrder = base - 0.02;
       n.cloud.renderOrder = base;

@@ -189,10 +189,10 @@ export default function GalaxyCanvas({
       {/* DOM label layer (managed imperatively by the engine) */}
       <div ref={labelLayerRef} className="absolute inset-0 z-10 pointer-events-none overflow-hidden" />
 
-      {/* cinematic vignette */}
+      {/* cinematic vignette — reaches further toward center to keep the void deep */}
       <div
         className="absolute inset-0 z-10 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse at center, transparent 48%, rgba(5,6,10,0.75) 100%)' }}
+        style={{ background: 'radial-gradient(ellipse at center, transparent 34%, rgba(5,6,10,0.28) 68%, rgba(5,6,10,0.82) 100%)' }}
       />
 
       {/* film grain */}

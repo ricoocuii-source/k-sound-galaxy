@@ -226,11 +226,11 @@ Respond strictly in JSON format matching the schema.`;
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`EchoOrbit server running on http://0.0.0.0:${PORT}`);
+    console.log(`K Sound Galaxy server running on http://0.0.0.0:${PORT}`);
   });
 }
 
 startServer().catch((err) => {
-  console.error('Failed to start EchoOrbit server:', err);
+  console.error('Failed to start K Sound Galaxy server:', err);
   process.exit(1);
 });

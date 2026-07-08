@@ -8,10 +8,7 @@ import { MusicNode, ConnectionInsight } from '../types';
 import { MUSIC_NODES, MUSIC_LINKS } from '../data';
 import { fetchTrackInfo } from '../engine/itunes';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  X, Sparkles, HelpCircle, Link2, Music, User, Globe, Radio, Briefcase, 
-  ArrowRight, ShieldAlert, AlertCircle, RefreshCw 
-} from 'lucide-react';
+import { X } from 'lucide-react';
 
 interface InsightPanelProps {
   nodeA: MusicNode | null;
@@ -170,287 +167,182 @@ export default function InsightPanel({
   };
 
   const neighborsA = getNeighbors(nodeA);
-  const neighborsB = nodeB ? getNeighbors(nodeB) : [];
 
-  const getNodeIcon = (type: string) => {
-    switch (type) {
-      case 'region': return <Globe className="w-4 h-4" />;
-      case 'genre': return <Radio className="w-4 h-4" />;
-      case 'label': return <Briefcase className="w-4 h-4" />;
-      case 'artist': return <User className="w-4 h-4" />;
-      default: return <Music className="w-4 h-4" />;
-    }
-  };
+  const artistName = (nodeA.artist || '').split('/')[0].trim();
 
   return (
     <motion.div
-      initial={{ x: '100%', opacity: 0.8 }}
+      initial={{ x: '100%', opacity: 0.6 }}
       animate={{ x: 0, opacity: 1 }}
-      exit={{ x: '100%', opacity: 0.8 }}
-      transition={{ type: 'spring', damping: 26, stiffness: 190 }}
-      className="fixed top-4 right-4 bottom-24 w-full max-w-sm md:max-w-md bg-[#040817] border border-slate-800/40 rounded-2xl shadow-[0_25px_60px_rgba(0,0,0,0.95)] overflow-hidden flex flex-col z-35"
+      exit={{ x: '100%', opacity: 0.6 }}
+      transition={{ type: 'spring', damping: 28, stiffness: 200 }}
+      className="fixed inset-y-0 right-0 w-full max-w-sm bg-[#05060a]/80 backdrop-blur-xl flex flex-col z-35"
     >
-      
-      {/* Panel Top Header bar */}
-      <div 
-        className="px-5 py-4 border-b border-slate-800/40 flex items-center justify-between bg-[#090e25] transition-all"
-        style={{ borderTop: `2px solid ${nodeA.color}` }}
+      {/* close */}
+      <button
+        onClick={onClose}
+        className="absolute top-24 right-7 p-1 text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer z-10"
+        title="Close"
       >
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-violet-400 animate-spin" style={{ animationDuration: '8s' }} />
-          <span className="text-xs font-mono font-semibold tracking-wider text-slate-300 uppercase">
-            {isComparisonMode ? 'Celestial Star Alignment' : 'Star Core Spectrogram'}
-          </span>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-1 hover:bg-slate-800/60 rounded text-slate-400 hover:text-white transition-all cursor-pointer"
-          title="Collapse Panel"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+        <X className="w-4 h-4" strokeWidth={1.5} />
+      </button>
 
-      {/* Main Panel Content (Scrollable) */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
-        
+      <div className="flex-1 overflow-y-auto px-8 pt-28 pb-32">
         <AnimatePresence mode="wait">
           {!isComparisonMode ? (
-            
-            // ================= NODE SPEC MODE =================
+
+            // ================= SONG DETAIL =================
             <motion.div
               key="node-spec"
-              initial={{ opacity: 0, y: 15 }}
+              initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              className="space-y-6"
+              exit={{ opacity: 0, y: -12 }}
+              className="space-y-7"
             >
-              {/* Star Core Summary */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span 
-                    className="p-2 rounded-lg"
-                    style={{ backgroundColor: `${nodeA.color}15`, color: nodeA.color }}
-                  >
-                    {getNodeIcon(nodeA.type)}
-                  </span>
-                  <div>
-                    <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">{nodeA.type} entity</span>
-                    <h2 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-                      <span>{nodeA.name}</span>
-                      {nodeA.chineseName && nodeA.chineseName !== nodeA.name && (
-                        <span className="text-sm text-slate-400 font-normal">({nodeA.chineseName})</span>
-                      )}
-                    </h2>
-                  </div>
-                </div>
-
-                {/* Cover/Wallpaper decoration if available */}
-                {(nodeAArtwork || nodeA.imageUrl) && (
-                  <div className="w-full h-44 rounded-xl overflow-hidden border border-slate-800/40 relative group bg-slate-950 flex items-center justify-center">
-                    <img 
-                      src={nodeAArtwork || nodeA.imageUrl} 
-                      alt={nodeA.name} 
-                      className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-700`}
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-[#040817] via-transparent to-transparent" />
-                  </div>
-                )}
-
-                <p className="text-sm text-slate-300 leading-relaxed font-sans">{nodeA.description}</p>
-              </div>
-
-              {/* Specific Metadata Fields (e.g., signature song spec) */}
-              {(nodeA.type === 'artist' || nodeA.type === 'song') && (
-                <div className="bg-slate-900/40 border border-slate-800/40 rounded-xl p-4 grid grid-cols-2 gap-3">
-                  <div>
-                    <span className="text-[10px] font-mono text-slate-400">Tempo (Speed)</span>
-                    <p className="text-sm font-semibold text-slate-200 font-mono">{nodeA.bpm} BPM</p>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-mono text-slate-400">Harmonic Key</span>
-                    <p className="text-sm font-semibold text-slate-200 font-mono">{nodeA.key}</p>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-mono text-slate-400">Atmospheric Mood</span>
-                    <p className="text-sm font-semibold text-slate-200" style={{ color: nodeA.color }}>{nodeA.mood}</p>
-                  </div>
-                  <div>
-                    <span className="text-[10px] font-mono text-slate-400">Launch Year</span>
-                    <p className="text-sm font-semibold text-slate-200 font-mono">{nodeA.year}</p>
-                  </div>
+              {/* cover — plain, no gradient overlay */}
+              {(nodeAArtwork || nodeA.imageUrl) && (
+                <div className="w-full aspect-square rounded-lg overflow-hidden bg-[#0d0f16]">
+                  <img
+                    src={nodeAArtwork || nodeA.imageUrl}
+                    alt={nodeA.name}
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
                 </div>
               )}
 
-              {/* Celestial Neighbors (Linked Nodes in graph) */}
-              <div className="space-y-3">
-                <h4 className="text-[11px] font-mono font-semibold text-slate-400 tracking-wider uppercase flex items-center gap-1">
-                  <Link2 className="w-3.5 h-3.5" />
-                  <span>Stellar Neighbors</span>
-                </h4>
-                
-                {neighborsA.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
+              {/* title */}
+              <div className="space-y-2.5">
+                <h2 className="font-serif font-medium text-3xl text-[#e8e0d2] leading-tight">
+                  {nodeA.name}
+                  {nodeA.chineseName && nodeA.chineseName !== nodeA.name && (
+                    <span className="text-lg text-[#e8e0d2]/45 ml-2.5">{nodeA.chineseName}</span>
+                  )}
+                </h2>
+                {artistName && (
+                  <div className="text-[10px] font-mono tracking-[0.24em] uppercase text-[#e8e0d2]/45">
+                    {artistName}
+                  </div>
+                )}
+              </div>
+
+              {/* one-line metadata */}
+              {(nodeA.type === 'artist' || nodeA.type === 'song') && (
+                <div className="text-[11px] font-mono text-[#e8e0d2]/40 tracking-wider">
+                  {nodeA.key} · {nodeA.bpm} BPM · {nodeA.year}
+                </div>
+              )}
+
+              {/* neighbors */}
+              {neighborsA.length > 0 && (
+                <div className="space-y-3 pt-3">
+                  <div className="text-[9px] font-mono tracking-[0.28em] uppercase text-[#e8e0d2]/30">
+                    Neighbors
+                  </div>
+                  <div className="flex flex-col gap-2">
                     {neighborsA.map((node) => (
                       <button
                         key={node.id}
                         onClick={() => onSelectNode(node)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-800/80 bg-slate-900/30 text-xs text-slate-300 hover:bg-slate-800/80 hover:text-white hover:border-slate-700 transition-all cursor-pointer"
+                        className="flex items-center gap-2.5 text-left text-[#e8e0d2]/60 hover:text-[#e8e0d2] transition-colors cursor-pointer w-fit"
                       >
-                        <span style={{ color: node.color }}>●</span>
-                        <span>{node.name}</span>
-                        <ArrowRight className="w-2.5 h-2.5 text-slate-500" />
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0"
+                          style={{ backgroundColor: node.color }}
+                        />
+                        <span className="font-serif text-base leading-none">{node.name}</span>
                       </button>
                     ))}
                   </div>
-                ) : (
-                  <p className="text-xs text-slate-500 font-mono italic">No isolated direct orbits detected.</p>
-                )}
-              </div>
-
-              {/* Dynamic Comparison Prompter */}
-              <div className="bg-gradient-to-r from-violet-950/20 to-blue-950/20 border border-violet-900/20 rounded-xl p-4 space-y-2">
-                <span className="text-[10px] font-mono text-violet-400 font-semibold uppercase flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  Double Star Comparison
-                </span>
-                <p className="text-xs text-slate-300">
-                  Hold <b>Shift</b> and click or drag onto another star node to analyze their deep stylistic connection using server-side Gemini.
-                </p>
-              </div>
-
-            </motion.div>
-          ) : (
-            
-            // ================= COMPARISON MODE =================
-            <motion.div
-              key="node-comparison"
-              initial={{ opacity: 0, y: 15 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -15 }}
-              className="space-y-6"
-            >
-              {/* Star Align Duel Card */}
-              <div className="flex items-center justify-between gap-3 bg-slate-900/30 border border-slate-800/40 p-3.5 rounded-xl relative">
-                
-                {/* Node A */}
-                <div className="flex flex-col items-center text-center w-[45%] min-w-0">
-                  <div className="relative w-12 h-12 rounded-full overflow-hidden border border-slate-700/50 mb-1.5 flex items-center justify-center bg-slate-950">
-                    {nodeAArtwork ? (
-                      <img src={nodeAArtwork} alt={nodeA.name} className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-xs font-mono font-bold" style={{ color: nodeA.color, background: `${nodeA.color}15` }}>
-                        {nodeA.name.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border border-slate-900 animate-pulse" style={{ backgroundColor: nodeA.color }} />
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-500 uppercase">{nodeA.type}</span>
-                  <h4 className="font-bold text-sm text-slate-200 truncate w-full">{nodeA.name}</h4>
-                </div>
-
-                {/* Connection Bridge */}
-                <div className="flex flex-col items-center">
-                  <span className="text-xs text-amber-500 font-semibold">VS</span>
-                  <div className="w-8 h-[1px] bg-slate-800 mt-1" />
-                </div>
-
-                {/* Node B */}
-                <div className="flex flex-col items-center text-center w-[45%] min-w-0">
-                  <div className="relative w-12 h-12 rounded-full overflow-hidden border border-slate-700/50 mb-1.5 flex items-center justify-center bg-slate-950">
-                    {nodeBArtwork ? (
-                      <img src={nodeBArtwork} alt={nodeB.name} className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-xs font-mono font-bold" style={{ color: nodeB.color, background: `${nodeB.color}15` }}>
-                        {nodeB.name.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border border-slate-900 animate-pulse" style={{ backgroundColor: nodeB.color }} />
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-500 uppercase">{nodeB.type}</span>
-                  <h4 className="font-bold text-sm text-slate-200 truncate w-full">{nodeB.name}</h4>
-                </div>
-
-              </div>
-
-              {/* Dynamic Loading Spectrogram */}
-              {loading && (
-                <div className="py-12 flex flex-col items-center justify-center space-y-4">
-                  <div className="relative">
-                    <div className="w-12 h-12 rounded-full border-2 border-amber-500/10 border-t-amber-500 animate-spin" />
-                    <Sparkles className="absolute inset-0 m-auto w-4 h-4 text-amber-400 animate-pulse" />
-                  </div>
-                  <p className="text-xs text-slate-400 font-mono animate-pulse text-center w-full">{loadingMsg}</p>
                 </div>
               )}
 
-              {/* Gemini Alignment Insights */}
+              {/* compare hint */}
+              <p className="text-[10px] text-[#e8e0d2]/30 leading-relaxed pt-3">
+                Shift-click another star to compare their musical DNA.
+              </p>
+            </motion.div>
+          ) : (
+
+            // ================= COMPARISON =================
+            <motion.div
+              key="node-comparison"
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              className="space-y-8"
+            >
+              {/* duel header */}
+              <div className="flex items-center gap-4 pt-1">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="w-10 h-10 rounded-full overflow-hidden bg-[#0d0f16] shrink-0 flex items-center justify-center">
+                    {nodeAArtwork ? (
+                      <img src={nodeAArtwork} alt={nodeA.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <span className="text-[10px] font-mono" style={{ color: nodeA.color }}>
+                        {nodeA.name.slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  <span className="font-serif text-sm text-[#e8e0d2]/85 truncate">{nodeA.name}</span>
+                </div>
+                <span className="text-[9px] font-mono tracking-[0.2em] text-[#e8e0d2]/30 shrink-0">VS</span>
+                <div className="flex items-center gap-3 flex-1 min-w-0 justify-end">
+                  <span className="font-serif text-sm text-[#e8e0d2]/85 truncate text-right">{nodeB!.name}</span>
+                  <div className="w-10 h-10 rounded-full overflow-hidden bg-[#0d0f16] shrink-0 flex items-center justify-center">
+                    {nodeBArtwork ? (
+                      <img src={nodeBArtwork} alt={nodeB!.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      <span className="text-[10px] font-mono" style={{ color: nodeB!.color }}>
+                        {nodeB!.name.slice(0, 2).toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* loading */}
+              {loading && (
+                <div className="py-14 flex flex-col items-center gap-5">
+                  <div className="w-8 h-8 rounded-full border border-[#e8e0d2]/15 border-t-[#e8e0d2]/70 animate-spin" />
+                  <p className="text-[10px] font-mono tracking-[0.18em] uppercase text-[#e8e0d2]/35 text-center">
+                    {loadingMsg}
+                  </p>
+                </div>
+              )}
+
+              {/* insight */}
               {insight && !loading && (
-                <div className="space-y-5">
-                  
-                  {/* Poetic Heuristic text */}
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono text-amber-400 font-semibold tracking-wider uppercase flex items-center gap-1">
-                      <Sparkles className="w-3 h-3" />
-                      Gemini DNA Heuristics
-                    </span>
-                    <p className="text-sm text-slate-200 leading-relaxed bg-slate-900/20 border border-slate-850 p-4 rounded-xl italic">
-                      "{insight.explanation}"
-                    </p>
-                  </div>
+                <div className="space-y-7">
+                  <p className="font-serif text-lg leading-relaxed text-[#e8e0d2]/85 italic">
+                    “{insight.explanation}”
+                  </p>
 
-                  {/* Shared DNA Tags */}
-                  <div className="space-y-2">
-                    <span className="text-[10px] font-mono text-slate-400 tracking-wider uppercase">Shared DNA Frequencies</span>
-                    <div className="flex flex-wrap gap-1.5">
-                      {insight.sharedDNA.length > 0 ? (
-                        insight.sharedDNA.map((tag, idx) => (
-                          <span
-                            key={idx}
-                            className="text-[10px] font-mono px-2 py-1 bg-slate-900 border border-slate-800 text-slate-300 rounded"
-                          >
-                            #{tag}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-[10px] font-mono px-2 py-1 bg-slate-900/20 border border-slate-900 text-slate-500 rounded">
-                          #StylisticOverlap
+                  {insight.sharedDNA.length > 0 && (
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {insight.sharedDNA.map((tag, idx) => (
+                        <span key={idx} className="text-[10px] font-mono tracking-wider text-[#e8e0d2]/45">
+                          #{tag}
                         </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Key warning popup in case user hasn't added API Key */}
-                  {error && (
-                    <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-3.5 flex gap-2.5">
-                      <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-mono text-amber-500 font-bold uppercase">Configuration Info</span>
-                        <p className="text-xs text-slate-400 leading-relaxed">
-                          Add your <b>GEMINI_API_KEY</b> in the <b>Settings &gt; Secrets</b> panel to unlock real-time, deep music analysis!
-                        </p>
-                      </div>
+                      ))}
                     </div>
                   )}
 
-                  {/* Action Controllers */}
-                  <div className="flex items-center gap-2 pt-2">
-                    <button
-                      onClick={onClearComparison}
-                      className="flex-1 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white transition-all cursor-pointer text-center"
-                    >
-                      Clear Alignment
-                    </button>
-                  </div>
+                  {error && (
+                    <p className="text-[10px] text-[#e8e0d2]/30 leading-relaxed">{error}</p>
+                  )}
 
+                  <button
+                    onClick={onClearComparison}
+                    className="text-[10px] font-mono tracking-[0.24em] uppercase text-[#e8e0d2]/45 hover:text-[#e8e0d2] transition-colors cursor-pointer"
+                  >
+                    Clear comparison
+                  </button>
                 </div>
               )}
-
             </motion.div>
           )}
         </AnimatePresence>
-
       </div>
     </motion.div>
   );
