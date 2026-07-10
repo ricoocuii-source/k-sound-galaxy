@@ -33,9 +33,6 @@ export interface MusicNode {
   bpm?: number;
   mood?: NodeMood;
   key?: string;
-  year?: number;
-  description?: string;
-  imageUrl?: string;
   signatureTrack?: string;
   synthConfig?: SynthConfig;
 

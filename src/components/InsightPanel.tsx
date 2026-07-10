@@ -200,10 +200,10 @@ export default function InsightPanel({
               className="space-y-7"
             >
               {/* cover — plain, no gradient overlay */}
-              {(nodeAArtwork || nodeA.imageUrl) && (
+              {nodeAArtwork && (
                 <div className="w-full aspect-square rounded-lg overflow-hidden bg-[#0d0f16]">
                   <img
-                    src={nodeAArtwork || nodeA.imageUrl}
+                    src={nodeAArtwork}
                     alt={nodeA.name}
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
@@ -229,7 +229,7 @@ export default function InsightPanel({
               {/* one-line metadata */}
               {(nodeA.type === 'artist' || nodeA.type === 'song') && (
                 <div className="text-[11px] font-mono text-[#e8e0d2]/40 tracking-wider">
-                  {nodeA.key} · {nodeA.bpm} BPM · {nodeA.year}
+                  {nodeA.key} · {nodeA.bpm} BPM
                 </div>
               )}
 

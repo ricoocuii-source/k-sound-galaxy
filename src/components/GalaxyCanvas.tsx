@@ -89,7 +89,6 @@ export default function GalaxyCanvas({
       onModeChange: (m) => setMode(m),
     });
     engineRef.current = engine;
-    (window as any).__galaxy = engine;
 
     // position the mirror title card every frame without React re-renders
     let raf = 0;

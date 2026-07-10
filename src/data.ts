@@ -314,14 +314,12 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['What Do I Call You', 'What Do I Call You', 98, 'B Minor', 'Chill'],
       ['To. X', 'To. X', 88, 'C Major', 'Cool'],
       ['Heaven', 'Heaven', 118, 'F# Minor', 'Grand'],
-      ['Drawing Moments', 'Drawing Our Moments', 74, 'Ab Major', 'Sad'],
       ['All About You', '和你的一切', 72, 'Db Major', 'Romantic'],
-      ['Eleven Eleven', '11:11', 82, 'C Major', 'Cozy'],
+      ['11:11', '11:11', 82, 'C Major', 'Cozy'],
       ['Happy', 'Happy', 112, 'Bb Major', 'Cheerful'],
       ['Dear Me', '致我', 75, 'Eb Major', 'Empowering'],
       ['Stay', 'Stay', 84, 'A Major', 'Emotional'],
       ['Voice', 'Voice', 120, 'F Major', 'Anthemic'],
-      ['Purpose', 'Purpose', 80, 'C Minor', 'Vulnerable'],
       ['Something New', 'Something New', 105, 'D Minor', 'Sassy'],
       ['Why', 'Why', 122, 'A Minor', 'Cheerful']
     ]
@@ -340,20 +338,12 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Mantra', 'Mantra', 118, 'G Minor', 'Bold'],
       ['Spot!', 'Spot!', 122, 'E Minor', 'Energetic'],
       ['Black', 'Black (Feat.)', 82, 'G Minor', 'Atmospheric'],
-      ['Special', 'Special (Feat.)', 90, 'C Major', 'Warm'],
-      ['GG Be', 'GG Be (Feat.)', 110, 'F Major', 'Cheerful'],
-      ['Solitaire', 'Solitaire', 100, 'C Minor', 'Chic'],
-      ['Velvet', 'Velvet', 92, 'F# Minor', 'Seductive'],
-      ['Midnight Glow', 'Midnight Glow', 114, 'D Major', 'Chill'],
-      ['Catwalk', 'Catwalk', 120, 'A Minor', 'Bold'],
-      ['Lace & Leather', 'Lace & Leather', 115, 'B Minor', 'Chic'],
-      ['Starlight Kiss', 'Starlight Kiss', 105, 'Db Major', 'Cozy'],
-      ['Pink Cadillac', 'Pink Cadillac', 110, 'C Minor', 'Sassy'],
-      ['Front Row', 'Front Row', 125, 'E Minor', 'Futuristic'],
-      ['Vogue Vibes', 'Vogue Vibes', 120, 'G Minor', 'Chic'],
-      ['After Hours Club', 'After Hours', 116, 'D Minor', 'Sensual'],
-      ['Runway', 'Runway', 128, 'C Minor', 'Bold'],
-      ['Sparkle', 'Sparkle', 112, 'A Major', 'Cheerful']
+      ['like JENNIE', 'like JENNIE', 140, 'C# Minor', 'Bold'],
+      ['Handlebars', 'Handlebars', 105, 'G Minor', 'Sassy'],
+      ['ExtraL', 'ExtraL', 130, 'F Minor', 'Bold'],
+      ['Love Hangover', 'Love Hangover', 112, 'A Minor', 'Seductive'],
+      ['ZEN', 'ZEN', 118, 'D Minor', 'Ethereal'],
+      ['Starlight', 'Starlight', 105, 'Db Major', 'Cozy']
     ]
   },
   {
@@ -368,22 +358,12 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Gone', 'Gone', 80, 'F Major', 'Melancholic'],
       ['APT.', 'APT.', 140, 'E Major', 'Zany'],
       ['Hard to Love', 'Hard to Love', 115, 'A Minor', 'Sassy'],
-      ['Viva La Vida', 'Viva La Vida (Cover)', 128, 'Db Major', 'Warm'],
-      ['Until I Found You', 'Until I Found You (Feat.)', 78, 'C Major', 'Cozy'],
-      ['Pink Ocean', 'Pink Ocean', 100, 'Eb Major', 'Dreamy'],
-      ['Acoustic Guitar', 'Acoustic Soul', 85, 'D Major', 'Organic'],
-      ['Ethereal Echoes', 'Ethereal Echoes', 90, 'A Minor', 'Atmospheric'],
-      ['Heartbreak Hotel', 'Heartbreak Hotel', 82, 'F Minor', 'Melancholic'],
-      ['Rhythm & Roses', 'Rhythm & Roses', 110, 'G Major', 'Sweet'],
-      ['Eyes Closed', 'Eyes Closed (Cover)', 74, 'C Minor', 'Sad'],
-      ['December Snow', 'December Snow', 76, 'Db Major', 'Cozy'],
-      ['Sunset Boulevard', 'Sunset Boulevard', 92, 'Bb Major', 'Cozy'],
-      ['Rockstar Rebel', 'Rockstar Rebel', 126, 'E Minor', 'Rebellious'],
-      ['Vaporwave', 'Vaporwave', 112, 'D Minor', 'Atmospheric'],
-      ['Guitar String', 'Guitar String', 80, 'G Major', 'Organic'],
-      ['Stray Bullet', 'Stray Bullet', 130, 'E Minor', 'Fiery'],
-      ['Electric Moon', 'Electric Moon', 118, 'C# Minor', 'Futuristic'],
-      ['Ocean Air', 'Ocean Air', 95, 'F Major', 'Cozy']
+      ['number one girl', 'number one girl', 88, 'C Major', 'Emotional'],
+      ['toxic till the end', 'toxic till the end', 122, 'A Minor', 'Dramatic'],
+      ['3am', '3am', 96, 'F Major', 'Bitter'],
+      ['two years', 'two years', 80, 'G Major', 'Melancholic'],
+      ['stay a little longer', 'stay a little longer', 84, 'Ab Major', 'Emotional'],
+      ['messy', 'messy', 110, 'D Minor', 'Vulnerable']
     ]
   },
   {
@@ -400,20 +380,12 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['New Woman', 'New Woman', 114, 'C Minor', 'Futuristic'],
       ['SG', 'SG (Feat.)', 105, 'G Minor', 'Latin'],
       ['Shoong!', 'Shoong! (Feat.)', 118, 'B Minor', 'Seductive'],
-      ['Blackpink Rap Medley', 'Rap Medley', 120, 'G Minor', 'Aggressive'],
-      ['Dance Break', 'Dance Solo Theme', 125, 'C# Minor', 'Energetic'],
-      ['Thailand Gold', 'Thailand Gold', 110, 'A Minor', 'Exotic'],
-      ['Lace Ribbon', 'Lace Ribbon', 115, 'F Major', 'Playful'],
-      ['Street Style', 'Street Style', 120, 'D Minor', 'Bold'],
-      ['Moonlit Desert', 'Moonlit Desert', 95, 'G Minor', 'Atmospheric'],
-      ['Golden Hour', 'Golden Hour', 112, 'C Major', 'Cheerful'],
-      ['VIP Access', 'VIP Access', 124, 'E Minor', 'Bold'],
-      ['Electric Heels', 'Electric Heels', 126, 'G Minor', 'Fiery'],
-      ['Vogue Dancer', 'Vogue Dancer', 118, 'F Minor', 'Futuristic'],
-      ['Silk & Satin', 'Silk & Satin', 102, 'C# Minor', 'Seductive'],
-      ['Bangkok Beats', 'Bangkok Beats', 130, 'D Minor', 'Exotic'],
-      ['Hype Machine', 'Hype Machine', 122, 'C Minor', 'Bold'],
-      ['Starlet', 'Starlet', 114, 'A Major', 'Playful']
+      ['Moonlit Floor', 'Moonlit Floor', 110, 'F# Minor', 'Seductive'],
+      ['Thunder', 'Thunder', 124, 'C Minor', 'Bold'],
+      ['Elastigirl', 'Elastigirl', 128, 'G Minor', 'Zany'],
+      ['Dream', 'Dream', 84, 'C Major', 'Dreamy'],
+      ['Born Again', 'Born Again', 118, 'A Minor', 'Empowering'],
+      ['When I\'m With You', 'When I\'m With You', 112, 'E Major', 'Sweet']
     ]
   },
   {
@@ -441,9 +413,7 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Right Now', 'Right Now', 120, 'C Major', 'Playful'],
       ['New Jeans', 'New Jeans', 134, 'Bb Major', 'Playful'],
       ['Zero', 'Zero', 128, 'E Minor', 'Electronic'],
-      ['Our Night', 'Our Night is More Beautiful Than Your Day', 95, 'F Major', 'Nostalgic'],
-      ['Blue Air', 'Blue', 110, 'A Minor', 'Cool'],
-      ['Bubble Wrap', 'Bubble Wrap', 120, 'C Major', 'Sweet']
+      ['Our Night', 'Our Night is More Beautiful Than Your Day', 95, 'F Major', 'Nostalgic']
     ]
   },
   {
@@ -473,7 +443,7 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Salty & Sweet', 'Salty & Sweet', 124, 'C# Minor', 'Seductive'],
       ['Mine', 'Mine', 120, 'D Minor', 'Dark'],
       ['Bahama', 'Bahama', 118, 'C Major', 'Sweet'],
-      ['Regret of Times', '时代遗物', 128, 'E Minor', 'Futuristic']
+      ['Regret of the Times', '时代遗憾', 128, 'E Minor', 'Futuristic']
     ]
   },
   {
@@ -619,13 +589,12 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Don\'t Fight the Feeling', 'Don\'t Fight the Feeling', 122, 'A Major', 'Hopeful'],
       ['Lotto', 'Lotto', 108, 'F Minor', 'Sassy'],
       ['The Eve', '전夜', 90, 'C# Minor', 'Sensual'],
-      ['First Snow', '첫 눈', 78, 'C Major', 'Cozy'],
+      ['The First Snow', '첫 눈', 78, 'C Major', 'Cozy'],
       ['Lucky One', 'Lucky One', 114, 'E Major', 'Funky'],
       ['History', 'History', 125, 'A Minor', 'Powerful'],
       ['Mama', 'MAMA', 120, 'D Minor', 'Grand'],
       ['Baby Don\'t Cry', '인어의 눈물', 82, 'G Major', 'Emotional'],
       ['Miracles in December', '12월의 기적', 72, 'C Major', 'Sad'],
-      ['Loveshot Acoustic', 'Love Shot Piano', 95, 'D Minor', 'Introspective'],
       ['Universe', 'Universe', 84, 'Ab Major', 'Emotional']
     ]
   },
@@ -645,18 +614,11 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Stuck In The Middle', 'Stuck In The Middle', 74, 'C Major', 'Sad'],
       ['Forever', 'Forever', 124, 'A Major', 'Hopeful'],
       ['Love In My Heart', 'Love In My Heart', 110, 'F Major', 'Sweet'],
-      ['Monster Beats', 'Monster Beats', 125, 'E Minor', 'Bold'],
       ['Dream', 'Dream', 82, 'Ab Major', 'Hopeful'],
-      ['Rising Star', 'Rising Star', 118, 'C Major', 'Anthemic'],
-      ['Cyber Pop', 'Cyber Pop', 128, 'D Minor', 'Futuristic'],
-      ['Midnight Show', 'Midnight Show', 112, 'Bb Major', 'Sassy'],
-      ['Golden Mic', 'Golden Mic', 95, 'A Minor', 'Bold'],
-      ['Shadow Dance', 'Shadow Dance', 120, 'G Minor', 'Mysterious'],
-      ['Electric Vibe', 'Electric Vibe', 122, 'C# Minor', 'Futuristic'],
-      ['Neon Lights', 'Neon Lights', 124, 'E Major', 'Cheerful'],
-      ['High Pitch', 'High Pitch', 130, 'D Major', 'Energetic'],
-      ['Bass Line', 'Bass Line', 105, 'F# Minor', 'Bold'],
-      ['Outro Rap', 'Outro Rap', 90, 'C Minor', 'Aggressive']
+      ['BILLIONAIRE', 'BILLIONAIRE', 120, 'F Minor', 'Bold'],
+      ['Really Like You', 'Really Like You', 108, 'C Major', 'Sweet'],
+      ['WE GO UP', 'WE GO UP', 126, 'D Minor', 'Energetic'],
+      ['HOT SAUCE', 'HOT SAUCE', 122, 'C# Minor', 'Fiery']
     ]
   },
   {
@@ -776,10 +738,8 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['My Time', '시차', 120, 'F Minor', 'R&B'],
       ['Euphoria', 'Euphoria', 120, 'Ab Major', 'Hopeful'],
       ['Begin', 'Begin', 125, 'C Minor', 'R&B'],
-      ['Decalcomania', 'Decalcomania', 75, 'C Minor', 'Vulnerable'],
       ['Never Let Go', 'Never Let Go', 122, 'C Major', 'Cheerful'],
-      ['Seven Acoustic', 'Seven (Acoustic)', 125, 'B Minor', 'Warm'],
-      ['Standing Next to You Remix', 'Standing Next to You (US Remix)', 116, 'C Minor', 'Bold']
+      ['Standing Next to You (USHER Remix)', 'Standing Next to You (USHER Remix)', 116, 'C Minor', 'Bold']
     ]
   }
 ];
@@ -806,9 +766,6 @@ function generateMusicNodes(): MusicNode[] {
         bpm: bpm || 100,
         key: key || 'C Major',
         mood: mood || 'Chill',
-        year: idx < 10 ? 2015 + idx : 2000 + idx, // programmatic distribution
-        description: `"${name}" is an iconic masterpiece track from ${artist.name}. Styled in ${key || 'C Major'} at ${bpm || 100} BPM, it weaves ${mood || 'Chill'} vocal textures with a magnificent, high-contrast, stellar melodic structure.`,
-        imageUrl: `https://images.unsplash.com/photo-${1514525253161 + idx * 1000}-7a46d19cd819?w=400&auto=format&fit=crop&q=80`,
         signatureTrack: name,
         synthConfig: {
           baseFreq: key?.includes('Minor') ? 220.00 : 261.63, // minor vs major base note
