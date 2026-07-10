@@ -1,6 +1,0 @@
-{
-  "name": "K Sound Galaxy",
-  "description": "An interactive Cosmic Artist Knowledge Graph exploring exact historical connections, stylistic traits, and musical lineages across global singers with an offline-first generative Web Audio DNA synthesizer.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
