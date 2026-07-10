@@ -7,16 +7,6 @@ export type NodeType = 'region' | 'genre' | 'label' | 'artist' | 'song';
 
 export type NodeMood = 'Atmospheric' | 'Energetic' | 'Chill' | 'Emotional' | 'Futuristic' | 'Organic' | string;
 
-export interface SynthConfig {
-  baseFreq: number; // e.g. 220 for A3
-  scaleType: 'major' | 'minor' | 'pentatonic' | 'dorian';
-  tempo: number; // BPM
-  oscillatorType: OscillatorType; // 'sine' | 'square' | 'sawtooth' | 'triangle'
-  delayTime: number; // 0 to 1
-  filterFreq: number; // cutoff frequency
-  resonance: number; // Q factor
-}
-
 export interface MusicNode {
   id: string;
   name: string;
@@ -34,7 +24,6 @@ export interface MusicNode {
   mood?: NodeMood;
   key?: string;
   signatureTrack?: string;
-  synthConfig?: SynthConfig;
 
   // Physics simulation properties (optional, managed by physics loop)
   x?: number;

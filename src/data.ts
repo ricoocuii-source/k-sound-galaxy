@@ -766,16 +766,7 @@ function generateMusicNodes(): MusicNode[] {
         bpm: bpm || 100,
         key: key || 'C Major',
         mood: mood || 'Chill',
-        signatureTrack: name,
-        synthConfig: {
-          baseFreq: key?.includes('Minor') ? 220.00 : 261.63, // minor vs major base note
-          scaleType: key?.includes('Minor') ? 'minor' : 'major',
-          tempo: bpm || 100,
-          oscillatorType: idx % 3 === 0 ? 'sine' : idx % 3 === 1 ? 'triangle' : 'sawtooth',
-          delayTime: isSuperstar ? 0.45 : 0.25,
-          filterFreq: 1000 + (bpm || 100) * 3,
-          resonance: 2.5
-        }
+        signatureTrack: name
       });
     });
   });

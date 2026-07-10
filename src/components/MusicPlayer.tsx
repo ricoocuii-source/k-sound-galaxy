@@ -3,9 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Bottom player — everything trimmed to: cover, name, playhead, volume.
- * No mode switcher, no metadata badges, no waveform background. iTunes
- * preview plays by default; on failure (or no preview available) the
- * procedural synth fills in silently.
+ * No mode switcher, no metadata badges, no waveform background. Plays the
+ * 30s iTunes preview only; songs without a preview stay silent.
  */
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -22,7 +21,7 @@ interface MusicPlayerProps {
   onPlayToggle: (playing: boolean) => void;
 }
 
-export default function MusicPlayer({ activeSong, isPlaying, trackInfo, onPlayToggle }: MusicPlayerProps) {
+export default function MusicPlayer({ activeSong, isPlaying, trackInfo, isLoadingTrack, onPlayToggle }: MusicPlayerProps) {
   const [volume, setVolume] = useState(0.5);
   const [progress, setProgress] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -31,53 +30,35 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, onPlayTo
 
   const previewUrl = trackInfo?.previewUrl || null;
   const artworkUrl = trackInfo?.artworkUrlSmall || null;
-  const usingSynth = activeSong ? !previewUrl : false;
+  const noPreview = !!activeSong && !isLoadingTrack && !previewUrl;
 
   useEffect(() => {
-    if (!activeSong) {
+    // Preview only — while the iTunes lookup is in flight (or a song has no
+    // preview) the player stays silent instead of substituting synthetic audio.
+    if (!activeSong || !previewUrl || !isPlaying) {
       musicSynth.pause();
       stopProgress();
-      setProgress(0);
-      return;
+      if (!previewUrl) {
+        setProgress(0);
+        setCurrentTime(0);
+        setDuration(30);
+      }
+      return () => stopProgress();
     }
 
-    if (usingSynth && activeSong.synthConfig) {
-      if (isPlaying) {
-        musicSynth.play(activeSong.synthConfig);
-        startProgress('synth');
-      } else {
-        musicSynth.pause();
-        stopProgress();
-      }
-    } else if (previewUrl) {
-      if (isPlaying) {
-        musicSynth.playPreview(previewUrl);
-        startProgress('real');
-      } else {
-        musicSynth.pause();
-        stopProgress();
-      }
-    }
-
+    musicSynth.playPreview(previewUrl);
+    startProgress();
     return () => stopProgress();
-  }, [activeSong, isPlaying, previewUrl, usingSynth]);
+  }, [activeSong, isPlaying, previewUrl]);
 
-  const startProgress = (kind: 'real' | 'synth') => {
+  const startProgress = () => {
     stopProgress();
-    if (kind === 'synth') {
-      progressIntervalRef.current = setInterval(() => {
-        setProgress((prev) => (prev >= 100 ? 0 : prev + 0.6));
-        setCurrentTime((prev) => (prev >= 180 ? 0 : prev + 0.9));
-      }, 500);
-      setDuration(180);
-    } else {
-      progressIntervalRef.current = setInterval(() => {
-        const prog = musicSynth.getPreviewProgress();
-        setCurrentTime(prog.currentTime);
-        setDuration(prog.duration || 30);
-        setProgress(prog.duration > 0 ? (prog.currentTime / prog.duration) * 100 : 0);
-      }, 200);
-    }
+    progressIntervalRef.current = setInterval(() => {
+      const prog = musicSynth.getPreviewProgress();
+      setCurrentTime(prog.currentTime);
+      setDuration(prog.duration || 30);
+      setProgress(prog.duration > 0 ? (prog.currentTime / prog.duration) * 100 : 0);
+    }, 200);
   };
 
   const stopProgress = () => {
@@ -92,7 +73,7 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, onPlayTo
   }, [volume]);
 
   const handlePlayClick = () => {
-    if (!activeSong) return;
+    if (!activeSong || noPreview) return;
     onPlayToggle(!isPlaying);
   };
 
@@ -126,6 +107,7 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, onPlayTo
               </div>
               <div className="text-[10px] font-mono tracking-[0.22em] uppercase text-[#e8e0d2]/45 mt-1 truncate">
                 {artistName}
+                {noPreview && <span className="text-[#e8e0d2]/25"> · NO PREVIEW</span>}
               </div>
             </>
           ) : (
@@ -140,13 +122,13 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, onPlayTo
       <div className="flex items-center gap-4 md:gap-5 flex-[1.6] min-w-0">
         <button
           onClick={handlePlayClick}
-          disabled={!activeSong}
+          disabled={!activeSong || noPreview}
           className={`w-9 h-9 rounded-full border flex items-center justify-center transition-all shrink-0 ${
-            activeSong
+            activeSong && !noPreview
               ? 'border-[#e8e0d2]/50 text-[#e8e0d2]/85 hover:border-[#e8e0d2] hover:text-[#e8e0d2] cursor-pointer'
               : 'border-[#e8e0d2]/12 text-[#e8e0d2]/20 cursor-not-allowed'
           }`}
-          title={isPlaying ? 'Pause' : 'Play'}
+          title={noPreview ? 'Preview unavailable' : isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
             <Pause className="w-3.5 h-3.5" strokeWidth={1.4} fill="currentColor" />
