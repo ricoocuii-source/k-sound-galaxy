@@ -24,6 +24,10 @@ export interface MusicNode {
   mood?: NodeMood;
   key?: string;
   signatureTrack?: string;
+  /** overrides the artist word used in the iTunes search term (e.g. Agust D) */
+  searchArtist?: string;
+  /** accepted iTunes artist credits for this artist's songs (official aliases / collab leads) */
+  itunesArtists?: string[];
 
   // Physics simulation properties (optional, managed by physics loop)
   x?: number;

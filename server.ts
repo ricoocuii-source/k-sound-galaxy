@@ -135,7 +135,7 @@ Respond strictly in JSON format matching the schema.`;
 
       if (itunesCache.has(term)) return res.json(itunesCache.get(term));
 
-      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=5`;
+      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=25`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`iTunes responded ${resp.status}`);
       const data: any = await resp.json();
@@ -160,46 +160,88 @@ Respond strictly in JSON format matching the schema.`;
     }
   });
 
-  // Binary pipes so textures/audio load without CORS headaches.
+  // Binary proxy so textures/audio load without CORS headaches.
   // Only allow Apple CDN hosts to avoid becoming an open proxy.
-  const pipeRemote = async (remoteUrl: string, res: express.Response) => {
+  const hostAllowed = (remoteUrl: string) => {
     const parsed = new URL(remoteUrl);
-    const allowed = /(\.mzstatic\.com|\.apple\.com)$/i.test(parsed.hostname);
-    if (!allowed) {
-      res.status(403).json({ error: 'host not allowed' });
-      return;
-    }
-    const resp = await fetch(remoteUrl);
-    if (!resp.ok || !resp.body) {
-      res.status(502).json({ error: `upstream ${resp.status}` });
-      return;
-    }
-    res.setHeader('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    const reader = resp.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
-    }
-    res.end();
+    return /(\.mzstatic\.com|\.apple\.com)$/i.test(parsed.hostname);
   };
 
+  // Upstream fetch with timeout + retries — Apple's CDN occasionally hiccups
+  // and a single failed request must never leave the UI without a cover.
+  const fetchUpstream = async (url: string, tries = 3, timeoutMs = 12000) => {
+    let lastErr: any = null;
+    for (let i = 0; i < tries; i++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+      try {
+        const resp = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(timer);
+        if (resp.ok && resp.body) return resp;
+        lastErr = new Error(`upstream ${resp.status}`);
+      } catch (err) {
+        clearTimeout(timer);
+        lastErr = err;
+      }
+      await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+    }
+    throw lastErr;
+  };
+
+  // Artwork: buffer whole images and cache them in memory — after the first
+  // successful fetch a cover is served instantly and can no longer fail.
+  const artworkCache = new Map<string, { type: string; data: Buffer }>();
+  const ARTWORK_CACHE_MAX = 300;
+
   app.get('/api/itunes/artwork', async (req, res) => {
+    const url = String(req.query.url || '');
     try {
-      await pipeRemote(String(req.query.url || ''), res);
+      if (!hostAllowed(url)) return res.status(403).json({ error: 'host not allowed' });
+      const hit = artworkCache.get(url);
+      if (hit) {
+        res.setHeader('Content-Type', hit.type);
+        res.setHeader('Cache-Control', 'public, max-age=604800');
+        return res.end(hit.data);
+      }
+      const resp = await fetchUpstream(url);
+      const data = Buffer.from(await resp.arrayBuffer());
+      const type = resp.headers.get('content-type') || 'image/jpeg';
+      artworkCache.set(url, { type, data });
+      if (artworkCache.size > ARTWORK_CACHE_MAX) {
+        const oldest = artworkCache.keys().next().value;
+        if (oldest) artworkCache.delete(oldest);
+      }
+      res.setHeader('Content-Type', type);
+      res.setHeader('Cache-Control', 'public, max-age=604800');
+      res.end(data);
     } catch (err: any) {
       console.error('artwork proxy error:', err.message);
       if (!res.headersSent) res.status(502).json({ error: err.message });
+      else res.destroy();
     }
   });
 
+  // Audio: stream previews, with the same retry on connect and a clean socket
+  // teardown if the upstream breaks mid-flight (so the client can retry
+  // instead of hanging on a half-finished response).
   app.get('/api/itunes/audio', async (req, res) => {
+    const url = String(req.query.url || '');
     try {
-      await pipeRemote(String(req.query.url || ''), res);
+      if (!hostAllowed(url)) return res.status(403).json({ error: 'host not allowed' });
+      const resp = await fetchUpstream(url);
+      res.setHeader('Content-Type', resp.headers.get('content-type') || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      const reader = resp.body!.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(Buffer.from(value));
+      }
+      res.end();
     } catch (err: any) {
       console.error('audio proxy error:', err.message);
       if (!res.headersSent) res.status(502).json({ error: err.message });
+      else res.destroy();
     }
   });
 

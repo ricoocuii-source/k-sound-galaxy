@@ -14,6 +14,8 @@ interface CompactArtist {
   genre: string;
   color: string;
   desc: string;
+  searchArtist?: string; // iTunes search alias (e.g. 'Agust D' for SUGA)
+  itunesArtists?: string[]; // accepted iTunes artist credits
   songs: [string, string?, number?, string?, string?][]; // [name, chineseName, bpm, key, mood]
 }
 
@@ -193,7 +195,6 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Blue Flame', 'Blue Flame', 120, 'C# Minor', 'Groovy'],
       ['No Celestial', 'No Celestial', 145, 'E Major', 'Anthemic'],
       ['Impurities', 'Impurities', 92, 'F Minor', 'Sensual'],
-      ['The Great Mermaid', 'The Great Mermaid', 125, 'D Minor', 'Bold'],
       ['Fire in the belly', 'Fire in the belly', 124, 'A Minor', 'Latin'],
       ['Swan Song', 'Swan Song', 86, 'Db Major', 'Warm'],
       ['Pierrot', 'Pierrot', 118, 'C Minor', 'Energetic'],
@@ -250,9 +251,6 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['One of a Kind', 'One of a Kind', 88, 'C Minor', 'Bold'],
       ['Who You?', 'Who You?', 100, 'A Major', 'Sarcastic'],
       ['Black', 'Black', 82, 'G Minor', 'Atmospheric'],
-      ['MichiGO', 'MichiGO', 124, 'F# Minor', 'Zany'],
-      ['Bullshit', 'Bullshit', 118, 'C# Minor', 'Aggressive'],
-      ['Middle Fingers Up', 'Middle Fingers Up', 95, 'Bb Major', 'Sassy'],
       ['Super Star', 'Super Star', 110, 'F Major', 'Vulnerability'],
       ['Divina Commedia', 'Divina Commedia', 90, 'A Minor', 'Avant-garde'],
       ['POWER', 'POWER', 124, 'D Minor', 'Anthemic'],
@@ -272,27 +270,17 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_hiphop',
     color: '#0EA5E9',
     desc: 'BTS rapper-producer Agust D, dealing in raw, introspective hip-hop.',
+    searchArtist: 'Agust D',
+    itunesArtists: ['Agust D', 'SUGA', 'BTS'],
     songs: [
-      ['Daechwita', 'Daechwita', 130, 'D Minor', 'Aggressive'],
       ['People', 'People', 85, 'G Major', 'Chill'],
       ['Haegeum', 'Haegeum', 126, 'E Minor', 'Aggressive'],
       ['Amygdala', 'Amygdala', 120, 'F Minor', 'Cathartic'],
-      ['Snooze', 'Snooze', 90, 'A Minor', 'Warm'],
       ['Polar Night', 'Polar Night', 88, 'C Minor', 'Dark'],
       ['Interlude Shadow', 'Shadow', 110, 'Db Minor', 'Intense'],
-      ['So Far Away', 'So Far Away', 76, 'Eb Major', 'Emotional'],
-      ['Agust D', 'Agust D', 122, 'D Minor', 'Aggressive'],
-      ['Give It To Me', 'Give It To Me', 124, 'B Minor', 'Defiant'],
-      ['Tony Montana', 'Tony Montana', 130, 'C Minor', 'Dark'],
-      ['Moonlight', 'Moonlight', 92, 'F Major', 'Nostalgic'],
-      ['Dear My Friend', 'Dear My Friend', 74, 'C Major', 'Nostalgic'],
-      ['D-Day', 'D-Day', 115, 'A Major', 'Energetic'],
       ['SDL', 'SDL', 105, 'Bb Major', 'Cozy'],
-      ['The Last', 'The Last', 125, 'C# Minor', 'Cathartic'],
       ['Strange', 'Strange', 92, 'F# Minor', 'Sarcastic'],
-      ['Burn It', 'Burn It', 114, 'G Minor', 'Intense'],
-      ['Honsool', 'Honsool', 70, 'D Minor', 'Atmospheric'],
-      ['HUH?!', 'HUH?!', 128, 'F Minor', 'Aggressive']
+      ['Burn It', 'Burn It', 114, 'G Minor', 'Intense']
     ]
   },
   {
@@ -314,7 +302,6 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['What Do I Call You', 'What Do I Call You', 98, 'B Minor', 'Chill'],
       ['To. X', 'To. X', 88, 'C Major', 'Cool'],
       ['Heaven', 'Heaven', 118, 'F# Minor', 'Grand'],
-      ['All About You', '和你的一切', 72, 'Db Major', 'Romantic'],
       ['11:11', '11:11', 82, 'C Major', 'Cozy'],
       ['Happy', 'Happy', 112, 'Bb Major', 'Cheerful'],
       ['Dear Me', '致我', 75, 'Eb Major', 'Empowering'],
@@ -331,6 +318,7 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_pop',
     color: '#10B981',
     desc: 'Global fashion and dance-pop icon from BLACKPINK.',
+    itunesArtists: ['JENNIE', 'BLACKPINK', 'ZICO', 'G-DRAGON', 'The Weeknd'],
     songs: [
       ['SOLO', 'SOLO', 95, 'D Minor', 'Empowering'],
       ['You & Me', 'You & Me', 112, 'A Minor', 'Seductive'],
@@ -353,11 +341,11 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_pop',
     color: '#06B6D4',
     desc: 'The unique, raspy vocal color and indie-rock star of BLACKPINK.',
+    itunesArtists: ['ROSÉ', 'BLACKPINK', 'Bruno Mars'],
     songs: [
       ['On The Ground', 'On The Ground', 122, 'G Major', 'Empowering'],
       ['Gone', 'Gone', 80, 'F Major', 'Melancholic'],
       ['APT.', 'APT.', 140, 'E Major', 'Zany'],
-      ['Hard to Love', 'Hard to Love', 115, 'A Minor', 'Sassy'],
       ['number one girl', 'number one girl', 88, 'C Major', 'Emotional'],
       ['toxic till the end', 'toxic till the end', 122, 'A Minor', 'Dramatic'],
       ['3am', '3am', 96, 'F Major', 'Bitter'],
@@ -373,6 +361,7 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_pop',
     color: '#F59E0B',
     desc: 'BLACKPINK\'s global dance and rap prodigy.',
+    itunesArtists: ['LISA', 'BLACKPINK', 'TAEYANG'],
     songs: [
       ['LALISA', 'LALISA', 125, 'C Minor', 'Bold'],
       ['MONEY', 'MONEY', 140, 'F Minor', 'Bold'],
@@ -546,15 +535,17 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_pop',
     color: '#22D3EE',
     desc: 'Storytellers of youth, exploring rock-infused pop, indie, and alternative electronic genres.',
+    searchArtist: 'TOMORROW X TOGETHER',
+    itunesArtists: ['TOMORROW X TOGETHER', 'TXT'],
     songs: [
       ['Crown', '어느날 머리에서 뿔이 자랐다', 125, 'F Major', 'Cheerful'],
       ['Blue Hour', '5시 53분의 하늘에서 발견한 너와 나', 114, 'G Major', 'Cheerful'],
       ['0X1=LOVESONG', 'I Know I Love You', 120, 'D Minor', 'Anthemic'],
-      ['LO$ER=LO<ER', 'LO$ER=LO<ER', 125, 'E Minor', 'Emotional'],
+      ['LO$ER=LO♡ER', 'LO$ER=LO♡ER', 125, 'E Minor', 'Emotional'],
       ['Sugar Rush Ride', 'Sugar Rush Ride', 125, 'C# Minor', 'Seductive'],
       ['Chasing That Feeling', 'Chasing That Feeling', 132, 'D Minor', 'Retro'],
       ['Deja Vu', 'Deja Vu', 128, 'A Minor', 'Dramatic'],
-      ['Run Away', '9와 4분의 3 승강장에서 너를 기다려', 130, 'Bb Major', 'Hopeful'],
+      ['9 and Three Quarters (Run Away)', '9와 4분의 3 승강장에서 너를 기다려', 130, 'Bb Major', 'Hopeful'],
       ['Cat & Dog', 'Cat & Dog', 122, 'C Minor', 'Playful'],
       ['Anti-Romantic', 'Anti-Romantic', 80, 'C Major', 'Sad'],
       ['Tinnitus', '돌멩이가 되고 싶어', 108, 'F Minor', 'Groovy'],
@@ -721,6 +712,8 @@ const COMPACT_ARTISTS: CompactArtist[] = [
     genre: 'genre_pop',
     color: '#6D28D9',
     desc: 'The Golden Maknae of BTS, conquering global charts with smooth pop, UK garage, and R&B styles.',
+    searchArtist: 'Jung Kook',
+    itunesArtists: ['Jung Kook', 'BTS'],
     songs: [
       ['Seven', 'Seven', 125, 'B Minor', 'Seductive'],
       ['3D', '3D', 108, 'F# Minor', 'Groovy'],
@@ -737,7 +730,6 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Dreamers', 'Dreamers', 115, 'Bb Major', 'Hopeful'],
       ['My Time', '시차', 120, 'F Minor', 'R&B'],
       ['Euphoria', 'Euphoria', 120, 'Ab Major', 'Hopeful'],
-      ['Begin', 'Begin', 125, 'C Minor', 'R&B'],
       ['Never Let Go', 'Never Let Go', 122, 'C Major', 'Cheerful'],
       ['Standing Next to You (USHER Remix)', 'Standing Next to You (USHER Remix)', 116, 'C Minor', 'Bold']
     ]
@@ -763,6 +755,8 @@ function generateMusicNodes(): MusicNode[] {
         region: artist.region,
         genre: artist.genre,
         artist: artist.chineseName ? `${artist.name} / ${artist.chineseName}` : artist.name,
+        searchArtist: artist.searchArtist,
+        itunesArtists: artist.itunesArtists,
         bpm: bpm || 100,
         key: key || 'C Major',
         mood: mood || 'Chill',
