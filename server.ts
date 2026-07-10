@@ -19,13 +19,13 @@ function getAiClient(): GoogleGenAI {
   if (!aiClient) {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY environment variable is not defined. Please add it in Settings > Secrets.');
+      throw new Error('GEMINI_API_KEY environment variable is not defined. Please set it in your .env file.');
     }
     aiClient = new GoogleGenAI({
       apiKey,
       httpOptions: {
         headers: {
-          'User-Agent': 'aistudio-build',
+          'User-Agent': 'k-sound-galaxy',
         },
       },
     });
@@ -114,7 +114,7 @@ Respond strictly in JSON format matching the schema.`;
           sharedDNA,
           similarityScore: score,
           offline: true,
-          errorMessage: geminiError.message.includes('GEMINI_API_KEY') ? 'Configuration key missing in Settings > Secrets. Using simulated galactic analysis.' : undefined
+          errorMessage: geminiError.message.includes('GEMINI_API_KEY') ? 'Configuration key missing. Set GEMINI_API_KEY in your .env file. Using simulated galactic analysis.' : undefined
         });
       }
 
