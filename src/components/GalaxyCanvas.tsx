@@ -160,11 +160,27 @@ export default function GalaxyCanvas({
       return;
     }
     let cancelled = false;
-    new THREE.TextureLoader().load(trackInfo.artworkUrl, (tex) => {
-      if (cancelled) return;
-      tex.colorSpace = THREE.SRGBColorSpace;
-      engine.setMirrorTexture(tex);
-    });
+    const url = trackInfo.artworkUrl;
+    const load = (attempt: number) => {
+      new THREE.TextureLoader().load(
+        url,
+        (tex) => {
+          if (cancelled) return;
+          tex.colorSpace = THREE.SRGBColorSpace;
+          engine.setMirrorTexture(tex);
+        },
+        undefined,
+        () => {
+          // transient proxy/CDN failures happen — retry a couple of times
+          if (!cancelled && attempt < 2) {
+            setTimeout(() => {
+              if (!cancelled) load(attempt + 1);
+            }, 700 * (attempt + 1));
+          }
+        }
+      );
+    };
+    load(0);
     return () => {
       cancelled = true;
     };

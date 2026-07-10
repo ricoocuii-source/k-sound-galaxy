@@ -9,6 +9,7 @@ import { MUSIC_NODES, MUSIC_LINKS } from '../data';
 import { fetchTrackInfo } from '../engine/itunes';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
+import RetryImage from './RetryImage';
 
 interface InsightPanelProps {
   nodeA: MusicNode | null;
@@ -202,12 +203,7 @@ export default function InsightPanel({
               {/* cover — plain, no gradient overlay */}
               {nodeAArtwork && (
                 <div className="w-full aspect-square rounded-lg overflow-hidden bg-[#0d0f16]">
-                  <img
-                    src={nodeAArtwork}
-                    alt={nodeA.name}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
+                  <RetryImage src={nodeAArtwork} alt={nodeA.name} className="w-full h-full object-cover" />
                 </div>
               )}
 
@@ -277,7 +273,7 @@ export default function InsightPanel({
                 <div className="flex items-center gap-3 flex-1 min-w-0">
                   <div className="w-10 h-10 rounded-full overflow-hidden bg-[#0d0f16] shrink-0 flex items-center justify-center">
                     {nodeAArtwork ? (
-                      <img src={nodeAArtwork} alt={nodeA.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      <RetryImage src={nodeAArtwork} alt={nodeA.name} className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-[10px] font-mono" style={{ color: nodeA.color }}>
                         {nodeA.name.slice(0, 2).toUpperCase()}
@@ -291,7 +287,7 @@ export default function InsightPanel({
                   <span className="font-serif text-sm text-[#e8e0d2]/85 truncate text-right">{nodeB!.name}</span>
                   <div className="w-10 h-10 rounded-full overflow-hidden bg-[#0d0f16] shrink-0 flex items-center justify-center">
                     {nodeBArtwork ? (
-                      <img src={nodeBArtwork} alt={nodeB!.name} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      <RetryImage src={nodeBArtwork} alt={nodeB!.name} className="w-full h-full object-cover" />
                     ) : (
                       <span className="text-[10px] font-mono" style={{ color: nodeB!.color }}>
                         {nodeB!.name.slice(0, 2).toUpperCase()}

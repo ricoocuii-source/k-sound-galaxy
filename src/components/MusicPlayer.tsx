@@ -12,6 +12,7 @@ import { MusicNode } from '../types';
 import musicSynth from '../synth';
 import { TrackInfo } from '../engine/itunes';
 import { Play, Pause, Volume2 } from 'lucide-react';
+import RetryImage from './RetryImage';
 
 interface MusicPlayerProps {
   activeSong: MusicNode | null;
@@ -94,7 +95,7 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, isLoadin
       <div className="flex items-center gap-4 flex-1 min-w-0">
         <div className="w-11 h-11 md:w-12 md:h-12 rounded-md bg-[#0d0f16] overflow-hidden shrink-0 flex items-center justify-center">
           {activeSong && artworkUrl ? (
-            <img src={artworkUrl} alt={activeSong.name} className="w-full h-full object-cover" />
+            <RetryImage src={artworkUrl} alt={activeSong.name} className="w-full h-full object-cover" />
           ) : (
             <div className="w-1.5 h-1.5 rounded-full bg-[#e8e0d2]/25" />
           )}

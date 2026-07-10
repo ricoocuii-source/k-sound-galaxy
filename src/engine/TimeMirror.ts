@@ -279,6 +279,7 @@ export class TimeMirror {
   private ripples: Float32Array;
   private rippleIndex = 0;
   private fallbackTex: THREE.Texture;
+  private texEpoch = 0; // bumped on every setTexture; guards close()'s deferred wipe
   public isOpen = false;
 
   constructor(haloTexture: THREE.Texture) {
@@ -425,19 +426,24 @@ export class TimeMirror {
     gsap.to(pm.uForm, { value: 0, duration: 0.75, ease: 'power2.in' });
     gsap.to(rm.uForm, { value: 0, duration: 0.9, ease: 'power2.in' });
     gsap.to(this.halo.material as THREE.SpriteMaterial, { opacity: 0, duration: 0.5 });
+    const epochAtClose = this.texEpoch;
     gsap.to([pm.uOpacity, rm.uOpacity], {
       value: 0,
       duration: 0.8,
       ease: 'power2.in',
       onComplete: () => {
         this.group.visible = false;
-        this.setTexture(null);
+        // Wipe the texture only if nothing newer arrived while we were fading
+        // out — otherwise a fast (cached) cover for the NEXT song would be
+        // erased by this deferred callback and the mirror would open empty.
+        if (this.texEpoch === epochAtClose) this.setTexture(null);
         onDone?.();
       },
     });
   }
 
   setTexture(tex: THREE.Texture | null) {
+    this.texEpoch++;
     const target = tex || this.fallbackTex;
     this.mirrorMat.uniforms.uMap.value = target;
     this.rimMat.uniforms.uMap.value = target;
