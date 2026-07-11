@@ -18,6 +18,59 @@ import { TrackInfo } from '../engine/itunes';
 import { NavRequest } from '../App';
 import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 
+/**
+ * Extract a tasteful accent color from a cover image: saturation-weighted hue
+ * histogram → dominant hue → normalized to a calm, airy tone that harmonizes
+ * with the cosmos (dust / halo pick it up). Returns null for near-monochrome
+ * covers or on any canvas failure — the accent is strictly optional.
+ */
+function extractCoverAccent(image: HTMLImageElement | undefined): string | null {
+  if (!image || !image.width) return null;
+  try {
+    const S = 24;
+    const cv = document.createElement('canvas');
+    cv.width = S;
+    cv.height = S;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(image, 0, 0, S, S);
+    const data = ctx.getImageData(0, 0, S, S).data;
+    const buckets = Array.from({ length: 12 }, () => ({ w: 0, r: 0, g: 0, b: 0 }));
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i] / 255;
+      const g = data[i + 1] / 255;
+      const b = data[i + 2] / 255;
+      const mx = Math.max(r, g, b);
+      const mn = Math.min(r, g, b);
+      const l = (mx + mn) / 2;
+      const d = mx - mn;
+      const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+      if (s < 0.12 || l < 0.12 || l > 0.92) continue; // skip greys / extremes
+      let h = 0;
+      if (mx === r) h = ((g - b) / d + 6) % 6;
+      else if (mx === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      const k = Math.floor(((h * 60) % 360) / 30) % 12;
+      const w = s * (1 - Math.abs(2 * l - 1)); // vivid mid-tones weigh most
+      buckets[k].w += w;
+      buckets[k].r += r * w;
+      buckets[k].g += g * w;
+      buckets[k].b += b * w;
+    }
+    let best = buckets[0];
+    for (const bk of buckets) if (bk.w > best.w) best = bk;
+    if (best.w < 1) return null; // essentially monochrome cover
+    const col = new THREE.Color(best.r / best.w, best.g / best.w, best.b / best.w);
+    const hsl = { h: 0, s: 0, l: 0 };
+    col.getHSL(hsl);
+    // calm it down: keep the hue, tame saturation, fix an airy lightness
+    col.setHSL(hsl.h, Math.min(0.42, Math.max(0.22, hsl.s * 0.7)), 0.68);
+    return `#${col.getHexString()}`;
+  } catch {
+    return null;
+  }
+}
+
 interface GalaxyCanvasProps {
   selectedNode: MusicNode | null;
   selectedNodeB: MusicNode | null;
@@ -167,7 +220,7 @@ export default function GalaxyCanvas({
         (tex) => {
           if (cancelled) return;
           tex.colorSpace = THREE.SRGBColorSpace;
-          engine.setMirrorTexture(tex);
+          engine.setMirrorTexture(tex, extractCoverAccent(tex.image));
         },
         undefined,
         () => {
