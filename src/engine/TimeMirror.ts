@@ -445,12 +445,13 @@ export class TimeMirror {
     rm.uVeil.value = 1;
     this.unveilStarted = false;
     this.openAt = this.lastTime;
-    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 1.25, ease: 'expo.out' });
-    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.5, ease: 'power2.out' });
-    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.55, ease: 'power2.out', delay: 0.25 });
-    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 1.1 });
-    // texture already loaded (cached cover): unveil once the dust body has formed
-    if (this.hasTexture) this.scheduleUnveil(1.0);
+    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 0.8, ease: 'expo.out' });
+    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.4, ease: 'power2.out' });
+    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.45, ease: 'power2.out', delay: 0.15 });
+    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 0.8 });
+    // texture already loaded (cached cover): unveil as soon as the dust body
+    // has taken shape — the WHOLE sequence must finish within the flight
+    if (this.hasTexture) this.scheduleUnveil(0.45);
   }
 
   close(onDone?: () => void) {
@@ -498,7 +499,7 @@ export class TimeMirror {
       // the cover is ready — let the dust body finish forming, then blow the
       // veil away and develop the image beneath it
       if (this.isOpen && !this.unveilStarted) {
-        this.scheduleUnveil(Math.max(0.15, 1.0 - (this.lastTime - this.openAt)));
+        this.scheduleUnveil(Math.max(0.1, 0.45 - (this.lastTime - this.openAt)));
       }
     } else {
       this.mirrorMat.uniforms.uHasMap.value = 0;
@@ -516,8 +517,8 @@ export class TimeMirror {
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
     gsap.killTweensOf([pm.uReveal, rm.uVeil]);
-    gsap.to(rm.uVeil, { value: 0, duration: 1.6, ease: 'power2.inOut', delay });
-    gsap.to(pm.uReveal, { value: 1, duration: 1.4, ease: 'power2.inOut', delay: delay + 0.15 });
+    gsap.to(rm.uVeil, { value: 0, duration: 1.0, ease: 'power2.inOut', delay });
+    gsap.to(pm.uReveal, { value: 1, duration: 0.9, ease: 'power2.inOut', delay: delay + 0.1 });
   }
 
   /**

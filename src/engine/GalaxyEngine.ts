@@ -1482,7 +1482,7 @@ export class GalaxyEngine {
     // parked camera. When switching songs, wait for the old lens to fade.
     const wasOpen = this.mirror.isOpen;
     this.mirrorOpenCall?.kill();
-    this.mirrorOpenCall = gsap.delayedCall(wasOpen ? 0.55 : 0.3, () => {
+    this.mirrorOpenCall = gsap.delayedCall(wasOpen ? 0.45 : 0.3, () => {
       const mirrorPos = new THREE.Vector3();
       planet.star.getWorldPosition(mirrorPos);
       mirrorPos.addScaledVector(normal, 5);
