@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>K Sound Galaxy — Prototype B+A</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #stage { position: fixed; inset: 0; }
+      /* film grain */
+      .grain {
+        position: fixed; inset: -60px; pointer-events: none; z-index: 30; opacity: 0.07;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        background-size: 240px 240px; mix-blend-mode: soft-light;
+        animation: g 0.9s steps(3) infinite;
+      }
+      @keyframes g { 0%{background-position:0 0} 33%{background-position:80px -60px} 66%{background-position:-70px 40px} 100%{background-position:0 0} }
+      .vignette {
+        position: fixed; inset: 0; pointer-events: none; z-index: 20;
+        background: radial-gradient(ellipse at center, transparent 26%, rgba(0,0,0,0.36) 62%, rgba(0,0,0,0.94) 100%);
+      }
+      .ui { position: fixed; z-index: 40; color: rgba(238,230,214,0.9); font-family: Georgia, 'Times New Roman', serif; }
+      .title { top: 28px; left: 34px; font-size: 15px; letter-spacing: 0.42em; text-transform: uppercase; }
+      .title small { display:block; margin-top: 7px; font-size: 9px; letter-spacing: 0.34em; color: rgba(238,230,214,0.38); }
+      .hint {
+        bottom: 30px; left: 50%; transform: translateX(-50%);
+        font-size: 10px; letter-spacing: 0.38em; text-transform: uppercase; color: rgba(238,230,214,0.42);
+        transition: opacity 0.6s;
+      }
+      .mode { top: 30px; right: 36px; font-size: 10px; letter-spacing: 0.4em; color: rgba(238,230,214,0.5); text-transform: uppercase; }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <div class="vignette"></div>
+    <div class="grain"></div>
+    <div class="ui title">K Sound Galaxy<small>Design Prototype · B+A — One Galaxy</small></div>
+    <div class="ui mode" id="mode">EDGE — 盘中行者</div>
+    <div class="ui hint" id="hint">点击任意处 · 切换 盘面视角 ⟷ 英雄构图</div>
+    <script type="module" src="/src/proto/main.ts"></script>
+  </body>
+</html>
