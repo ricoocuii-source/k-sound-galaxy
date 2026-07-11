@@ -1,12 +1,14 @@
 /**
- * K Sound Galaxy — Visual Prototype "B+A: The One Galaxy"
+ * K Sound Galaxy — Visual Prototype "B+A: The One Galaxy" (v2 — NO ARMS)
  *
- * ONE colossal Andromeda-class galaxy (420k GPU stars + dark dust lanes +
- * glowing gas + blazing amber core), with two camera languages:
- *   EDGE — Interstellar-style in-plane glide, grains streaming past
- *   HERO — tilted 3/4 photographic money shot
- * Click anywhere to travel between them. Fully self-contained; the real app
- * is untouched.
+ * The references are NOT spiral-arm galaxies: they are CONTINUOUS luminous
+ * disks banded by concentric dust rings (Andromeda photos) / a pure particle
+ * ring-sea (Interstellar). v2 rebuilds the structure accordingly:
+ *   - stars fill the whole disk, density/brightness modulated by ONE shared
+ *     concentric band profile (bright swells + dark ring lanes)
+ *   - dark dust = ring lanes aligned with the carved gaps
+ *   - a continuous luminous plate shader gives the disk its solid body
+ * Two camera languages: EDGE (in-plane glide) ⟷ HERO (tilted money shot).
  */
 
 import * as THREE from 'three';
@@ -16,9 +18,8 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { gsap } from 'gsap';
 
-// Drive gsap from our own render loop (manual mode). In this embedded-browser
-// environment gsap's internal rAF ticker can stay frozen even while the page
-// renders — updateRoot() from frame() makes every tween follow OUR clock.
+// Drive gsap from our own render loop — this embedded browser can freeze
+// gsap's internal rAF ticker even while the page renders fine.
 gsap.ticker.remove(gsap.updateRoot);
 
 // ---------------------------------------------------------------- setup
@@ -36,11 +37,11 @@ const camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.5, 20
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 1.15, 0.55, 0.72);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 1.1, 0.55, 0.74);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
-// ---------------------------------------------------------------- canvas textures
+// ---------------------------------------------------------------- textures
 function glowTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
@@ -56,12 +57,12 @@ function glowTexture(): THREE.Texture {
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
-function smokeTexture(seedBlobs = 15): THREE.Texture {
+function smokeTexture(): THREE.Texture {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
   const x = c.getContext('2d')!;
   x.clearRect(0, 0, 256, 256);
-  for (let i = 0; i < seedBlobs; i++) {
+  for (let i = 0; i < 15; i++) {
     const bx = 70 + Math.random() * 116;
     const by = 70 + Math.random() * 116;
     const br = 28 + Math.random() * 66;
@@ -79,23 +80,66 @@ function smokeTexture(seedBlobs = 15): THREE.Texture {
 const glowTex = glowTexture();
 const smokeTex = smokeTexture();
 
-// ---------------------------------------------------------------- galaxy params
-const R = 900;                 // disk radius
-const TURNS = 7.4;             // total arm winding (radians)
-const STAR_COUNT = 420_000;
+// ---------------------------------------------------------------- the ONE band profile
+// Concentric structure shared by stars, dust rings and the luminous plate —
+// this coherence is what makes the disk read as one physical body.
+const R = 900;
 const gauss = () => Math.random() + Math.random() + Math.random() - 1.5;
 
-// color story (ref: Andromeda photos) — amber core → dusty rose → violet-blue rim
+interface Lane { c: number; w: number; d: number } // center (0..1), width, depth
+const LANES: Lane[] = [];
+{
+  let c = 0.2;
+  while (c < 0.97) {
+    LANES.push({ c, w: 0.008 + Math.random() * 0.026, d: 0.4 + Math.random() * 0.45 });
+    c += 0.05 + Math.random() * 0.1;
+  }
+}
+const BAND_N = 512;
+const bandProfile = new Float32Array(BAND_N);
+for (let i = 0; i < BAND_N; i++) {
+  const x = i / (BAND_N - 1);
+  // gentle broad swells so the disk isn't uniformly bright
+  let v = 0.82 + 0.18 * Math.sin(x * 19.7 + 1.3) * Math.sin(x * 7.1 + 4.2);
+  // carve the dark ring lanes
+  for (const L of LANES) {
+    const g = Math.exp(-((x - L.c) * (x - L.c)) / (2 * L.w * L.w));
+    v *= 1 - L.d * g;
+  }
+  bandProfile[i] = Math.max(0.06, v);
+}
+const bandAt = (x: number) =>
+  bandProfile[Math.min(BAND_N - 1, Math.max(0, Math.floor(x * BAND_N)))];
+
+// band profile → texture for the plate shader
+const bandTex = (() => {
+  const data = new Uint8Array(BAND_N * 4);
+  for (let i = 0; i < BAND_N; i++) {
+    const v = Math.round(bandProfile[i] * 255);
+    data[i * 4] = v; data[i * 4 + 1] = v; data[i * 4 + 2] = v; data[i * 4 + 3] = 255;
+  }
+  const t = new THREE.DataTexture(data, BAND_N, 1, THREE.RGBAFormat);
+  t.needsUpdate = true;
+  return t;
+})();
+
+// color story — amber core → dusty rose → violet → cool blue rim
 const C_CORE = new THREE.Color('#ffdfae');
 const C_MID = new THREE.Color('#d99e94');
 const C_ROSE = new THREE.Color('#c489b4');
 const C_RIM = new THREE.Color('#8fa0dc');
-const C_HOT = new THREE.Color('#dfe9ff'); // scattered young blue-white giants
+const C_HOT = new THREE.Color('#dfe9ff');
+function rampColor(out: THREE.Color, r01: number) {
+  if (r01 < 0.22) out.copy(C_CORE).lerp(C_MID, r01 / 0.22);
+  else if (r01 < 0.55) out.copy(C_MID).lerp(C_ROSE, (r01 - 0.22) / 0.33);
+  else out.copy(C_ROSE).lerp(C_RIM, (r01 - 0.55) / 0.45);
+}
 
 const galaxy = new THREE.Group();
 scene.add(galaxy);
 
-// ---------------------------------------------------------------- 420k stars
+// ---------------------------------------------------------------- 420k stars — continuous banded disk
+const STAR_COUNT = 420_000;
 {
   const pR = new Float32Array(STAR_COUNT);
   const pT = new Float32Array(STAR_COUNT);
@@ -107,51 +151,38 @@ scene.add(galaxy);
 
   for (let i = 0; i < STAR_COUNT; i++) {
     const pop = Math.random();
-    let t: number, r: number, theta: number, h: number, size: number;
+    let r01: number, h: number, size: number;
 
-    if (pop < 0.14) {
-      // amber bulge
-      t = 0;
-      r = Math.abs(gauss()) * R * 0.13;
-      theta = Math.random() * Math.PI * 2;
-      h = gauss() * R * 0.05 * (1 - r / (R * 0.2));
+    if (pop < 0.13) {
+      // blazing bulge
+      r01 = Math.abs(gauss()) * 0.09;
+      h = gauss() * R * 0.045 * (1 - r01 * 4);
       size = 0.8 + Math.random() * 1.7;
-      tmp.copy(C_CORE).lerp(C_MID, Math.random() * 0.3);
-      tmp.multiplyScalar(0.85 + Math.random() * 0.5);
-    } else if (pop < 0.9) {
-      // spiral arms + feathered spurs
-      t = Math.pow(Math.random(), 0.72);
-      r = R * (0.05 + 0.95 * Math.pow(t, 1.38));
-      const arm = i % 2;
-      const spread = (0.08 + 0.3 * t) * (1 + Math.abs(gauss()) * 0.35);
-      theta = arm * Math.PI + t * TURNS + gauss() * spread;
-      if (Math.random() < 0.13) theta += (Math.random() < 0.5 ? 1 : -1) * (0.22 + Math.random() * 0.3); // spurs
-      h = gauss() * R * 0.016 * (0.5 + 1.6 * Math.exp(-t * 2.6));
-      size = 0.55 + Math.random() * 1.5;
-      // radial color ramp with jitter
-      if (t < 0.3) tmp.copy(C_CORE).lerp(C_MID, t / 0.3);
-      else if (t < 0.62) tmp.copy(C_MID).lerp(C_ROSE, (t - 0.3) / 0.32);
-      else tmp.copy(C_ROSE).lerp(C_RIM, (t - 0.62) / 0.38);
+      tmp.copy(C_CORE).lerp(C_MID, Math.random() * 0.3).multiplyScalar(0.9 + Math.random() * 0.5);
+    } else if (pop < 0.92) {
+      // continuous disk — density via radial power + band rejection sampling
+      do {
+        r01 = 0.06 + 0.94 * Math.pow(Math.random(), 0.58);
+      } while (Math.random() > 0.25 + 0.75 * bandAt(r01));
+      h = gauss() * R * 0.011 * (0.55 + 1.8 * Math.exp(-r01 * 3.2));
+      size = 0.5 + Math.random() * 1.4;
+      rampColor(tmp, r01);
       tmp.offsetHSL((Math.random() - 0.5) * 0.03, 0, (Math.random() - 0.5) * 0.1);
-      const lum = 0.5 + Math.random() * 0.6;
-      tmp.multiplyScalar(lum);
-      // rare hot giants — bloom picks them into star-spikes
-      if (Math.random() < 0.012) {
-        tmp.copy(C_HOT).multiplyScalar(1.6 + Math.random() * 1.3);
-        size = 1.9 + Math.random() * 1.8;
+      tmp.multiplyScalar((0.4 + Math.random() * 0.55) * (0.45 + 0.75 * bandAt(r01)));
+      if (Math.random() < 0.01) {
+        tmp.copy(C_HOT).multiplyScalar(1.5 + Math.random() * 1.2);
+        size = 1.8 + Math.random() * 1.6;
       }
     } else {
-      // sparse thick-disk halo field — quiet, never competing with the disk
-      t = Math.random();
-      r = R * (0.15 + 1.1 * Math.pow(Math.random(), 0.6));
-      theta = Math.random() * Math.PI * 2;
-      h = gauss() * R * 0.06;
+      // sparse thick-disk halo
+      r01 = 0.15 + 1.05 * Math.pow(Math.random(), 0.6);
+      h = gauss() * R * 0.055;
       size = 0.35 + Math.random() * 0.6;
-      tmp.copy(C_RIM).lerp(C_MID, Math.random() * 0.4).multiplyScalar(0.18 + Math.random() * 0.22);
+      tmp.copy(C_RIM).lerp(C_MID, Math.random() * 0.4).multiplyScalar(0.16 + Math.random() * 0.2);
     }
 
-    pR[i] = r;
-    pT[i] = theta;
+    pR[i] = r01 * R;
+    pT[i] = Math.random() * Math.PI * 2;
     pH[i] = h;
     pS[i] = size;
     pTw[i] = Math.random() * Math.PI * 2;
@@ -179,15 +210,14 @@ scene.add(galaxy);
       uniform float uTime; uniform float uPx;
       varying vec3 vC; varying float vTw;
       void main() {
-        // density-wave rotation: mostly rigid, tiny shear
-        float w = 0.028 + 0.05 / (sqrt(aR * 0.02) + 1.0);
+        // slow differential rotation — inner rings lead, like a real disk
+        float w = 0.016 + 0.045 / (sqrt(aR * 0.02) + 1.0);
         float th = aT + uTime * w;
         vec3 pos = vec3(cos(th) * aR, aH, sin(th) * aR);
         vec4 mv = modelViewMatrix * vec4(pos, 1.0);
         gl_Position = projectionMatrix * mv;
         float att = 340.0 / max(1.0, -mv.z);
         gl_PointSize = clamp(aS * att * uPx, 0.5, 22.0);
-        // aerial perspective: far grains dim — sells depth on the far rim
         float depthDim = clamp(1.35 - (-mv.z) / 4200.0, 0.42, 1.0);
         vC = aC * depthDim;
         vTw = aTw;
@@ -210,39 +240,125 @@ scene.add(galaxy);
   (galaxy as any).__starMat = mat;
 }
 
-// ---------------------------------------------------------------- smoke layers (points with texture)
-function makeSmokeLayer(count: number, opts: { dark: boolean }): THREE.Points {
-  const pR = new Float32Array(count);
-  const pT = new Float32Array(count);
-  const pH = new Float32Array(count);
-  const pS = new Float32Array(count);
-  const pRot = new Float32Array(count);
-  const pA = new Float32Array(count);
-  const pC = new Float32Array(count * 3);
+// ---------------------------------------------------------------- luminous plate — the disk's solid body
+const plate = (() => {
+  const geo = new THREE.CircleGeometry(R * 1.04, 128);
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    uniforms: {
+      uTime: { value: 0 },
+      uBand: { value: bandTex },
+      uCore: { value: C_CORE },
+      uMid: { value: C_MID },
+      uRose: { value: C_ROSE },
+      uRim: { value: C_RIM },
+    },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv; varying float vFacing;
+      void main() {
+        vUv = uv;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vec3 n = normalize(normalMatrix * vec3(0.0, 0.0, 1.0));
+        vFacing = abs(normalize(mv.xyz).z * n.z + dot(normalize(-mv.xyz), n));
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D uBand;
+      uniform float uTime;
+      uniform vec3 uCore; uniform vec3 uMid; uniform vec3 uRose; uniform vec3 uRim;
+      varying vec2 vUv; varying float vFacing;
+      float h21(vec2 p){ p = fract(p*vec2(234.34,435.345)); p += dot(p,p+34.23); return fract(p.x*p.y); }
+      float vno(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
+        return mix(mix(h21(i),h21(i+vec2(1,0)),u.x), mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),u.x), u.y); }
+      float fbm(vec2 p){ float v=0., a=.55; for(int k=0;k<3;k++){ v+=a*vno(p); p*=2.13; a*=.5; } return v; }
+      void main() {
+        vec2 p = vUv * 2.0 - 1.0;
+        float r = length(p);
+        if (r > 1.0) discard;
+        float band = texture2D(uBand, vec2(r, 0.5)).r;
+        // slow shear rotation of the marbling — the disk breathes
+        float ang = atan(p.y, p.x);
+        float marble = fbm(vec2(ang * 2.2 + uTime * 0.01, r * 9.0));
+        float body = smoothstep(1.0, 0.86, r) * (0.22 + 0.78 * band) * (0.55 + 0.6 * marble);
+        // blazing inner glow — the yolk of the reference photos
+        float core = exp(-r * 5.2) * 1.7 + exp(-r * 15.0) * 2.4;
+        vec3 col = mix(uCore, uMid, smoothstep(0.05, 0.3, r));
+        col = mix(col, uRose, smoothstep(0.3, 0.62, r));
+        col = mix(col, uRim, smoothstep(0.62, 1.0, r));
+        float alpha = (body * 0.34 + core * 0.5) * clamp(vFacing, 0.06, 1.0);
+        gl_FragColor = vec4(col * (0.55 + 0.9 * band + core * 0.35), alpha);
+      }
+    `,
+  });
+  const m = new THREE.Mesh(geo, mat);
+  m.rotation.x = -Math.PI / 2;
+  m.renderOrder = 0;
+  galaxy.add(m);
+  return mat;
+})();
+
+// ---------------------------------------------------------------- dust ring lanes (dark) + gas sheen
+function ringDust(): THREE.Points {
+  const COUNT = 3000;
+  const pR = new Float32Array(COUNT);
+  const pT = new Float32Array(COUNT);
+  const pH = new Float32Array(COUNT);
+  const pS = new Float32Array(COUNT);
+  const pRot = new Float32Array(COUNT);
+  const pA = new Float32Array(COUNT);
+  const pC = new Float32Array(COUNT * 3);
   const tmp = new THREE.Color();
-  for (let i = 0; i < count; i++) {
-    const t = opts.dark ? 0.12 + 0.82 * Math.sqrt(Math.random()) : Math.pow(Math.random(), 0.8);
-    const r = R * (0.06 + 0.94 * Math.pow(t, 1.38));
-    const arm = i % 2;
-    const spread = opts.dark ? 0.06 + 0.1 * t : 0.12 + 0.24 * t;
-    pR[i] = r;
-    pT[i] = arm * Math.PI + t * TURNS + gauss() * spread + (opts.dark ? -0.1 : 0.02);
-    pH[i] = gauss() * R * 0.012 * (0.6 + t);
-    pS[i] = opts.dark ? 40 + Math.random() * 85 : 55 + Math.random() * 120;
+  for (let i = 0; i < COUNT; i++) {
+    const L = LANES[(Math.random() * LANES.length) | 0];
+    const r01 = THREE.MathUtils.clamp(L.c + gauss() * L.w * 1.1, 0.05, 1);
+    pR[i] = r01 * R;
+    pT[i] = Math.random() * Math.PI * 2;
+    pH[i] = gauss() * R * 0.006;
+    pS[i] = 26 + Math.random() * 55;
     pRot[i] = Math.random() * Math.PI * 2;
-    if (opts.dark) {
-      tmp.set('#1a120e').lerp(new THREE.Color('#2b1a22'), Math.random());
-      pA[i] = 0.32 + Math.random() * 0.3;
-    } else {
-      if (t < 0.35) tmp.copy(C_CORE).lerp(C_MID, t / 0.35);
-      else tmp.copy(C_ROSE).lerp(C_RIM, (t - 0.35) / 0.65);
-      tmp.multiplyScalar(0.5);
-      pA[i] = 0.05 + Math.random() * 0.08;
-    }
+    pA[i] = (0.2 + Math.random() * 0.25) * L.d;
+    tmp.set('#171015').lerp(new THREE.Color('#2b1a20'), Math.random());
     pC[i * 3] = tmp.r; pC[i * 3 + 1] = tmp.g; pC[i * 3 + 2] = tmp.b;
   }
+  return smokePoints(COUNT, pR, pT, pH, pS, pRot, pA, pC, THREE.NormalBlending);
+}
+function gasSheen(): THREE.Points {
+  const COUNT = 2400;
+  const pR = new Float32Array(COUNT);
+  const pT = new Float32Array(COUNT);
+  const pH = new Float32Array(COUNT);
+  const pS = new Float32Array(COUNT);
+  const pRot = new Float32Array(COUNT);
+  const pA = new Float32Array(COUNT);
+  const pC = new Float32Array(COUNT * 3);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < COUNT; i++) {
+    let r01: number;
+    do {
+      r01 = 0.05 + 0.95 * Math.pow(Math.random(), 0.6);
+    } while (Math.random() > 0.3 + 0.7 * bandAt(r01));
+    pR[i] = r01 * R;
+    pT[i] = Math.random() * Math.PI * 2;
+    pH[i] = gauss() * R * 0.008;
+    pS[i] = 45 + Math.random() * 110;
+    pRot[i] = Math.random() * Math.PI * 2;
+    pA[i] = 0.04 + Math.random() * 0.06;
+    rampColor(tmp, r01);
+    tmp.multiplyScalar(0.5);
+    pC[i * 3] = tmp.r; pC[i * 3 + 1] = tmp.g; pC[i * 3 + 2] = tmp.b;
+  }
+  return smokePoints(COUNT, pR, pT, pH, pS, pRot, pA, pC, THREE.AdditiveBlending);
+}
+function smokePoints(
+  COUNT: number, pR: Float32Array, pT: Float32Array, pH: Float32Array, pS: Float32Array,
+  pRot: Float32Array, pA: Float32Array, pC: Float32Array, blending: THREE.Blending
+): THREE.Points {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
   geo.setAttribute('aR', new THREE.BufferAttribute(pR, 1));
   geo.setAttribute('aT', new THREE.BufferAttribute(pT, 1));
   geo.setAttribute('aH', new THREE.BufferAttribute(pH, 1));
@@ -251,11 +367,10 @@ function makeSmokeLayer(count: number, opts: { dark: boolean }): THREE.Points {
   geo.setAttribute('aA', new THREE.BufferAttribute(pA, 1));
   geo.setAttribute('aC', new THREE.BufferAttribute(pC, 3));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), R * 2.2);
-
   const mat = new THREE.ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    blending: opts.dark ? THREE.NormalBlending : THREE.AdditiveBlending,
+    blending,
     uniforms: {
       uTime: { value: 0 },
       uPx: { value: Math.min(devicePixelRatio, 2) },
@@ -267,7 +382,7 @@ function makeSmokeLayer(count: number, opts: { dark: boolean }): THREE.Points {
       uniform float uTime; uniform float uPx;
       varying vec3 vC; varying float vA; varying float vRot;
       void main() {
-        float w = 0.028 + 0.05 / (sqrt(aR * 0.02) + 1.0);
+        float w = 0.016 + 0.045 / (sqrt(aR * 0.02) + 1.0);
         float th = aT + uTime * w;
         vec3 pos = vec3(cos(th) * aR, aH, sin(th) * aR);
         vec4 mv = modelViewMatrix * vec4(pos, 1.0);
@@ -277,7 +392,7 @@ function makeSmokeLayer(count: number, opts: { dark: boolean }): THREE.Points {
         float depthDim = clamp(1.35 - (-mv.z) / 4200.0, 0.45, 1.0);
         vC = aC * depthDim;
         vA = aA;
-        vRot = aRot + uTime * 0.02;
+        vRot = aRot + uTime * 0.015;
       }
     `,
     fragmentShader: /* glsl */ `
@@ -295,10 +410,10 @@ function makeSmokeLayer(count: number, opts: { dark: boolean }): THREE.Points {
   });
   return new THREE.Points(geo, mat);
 }
-const gasLayer = makeSmokeLayer(2600, { dark: false });
-const dustLayer = makeSmokeLayer(2400, { dark: true });
-dustLayer.renderOrder = 2;
+const gasLayer = gasSheen();
+const dustLayer = ringDust();
 gasLayer.renderOrder = 1;
+dustLayer.renderOrder = 2;
 galaxy.add(gasLayer, dustLayer);
 
 // ---------------------------------------------------------------- blazing core
@@ -318,7 +433,7 @@ galaxy.add(coreSprite('#ffd9a0', 260, 0.5));
 galaxy.add(coreSprite('#e8b37a', 640, 0.16, true));
 galaxy.add(coreSprite('#b98a8f', 1150, 0.05, true));
 
-// ---------------------------------------------------------------- artist cluster knots (fake data for the prototype)
+// ---------------------------------------------------------------- artist cluster knots (fake data)
 const ARTISTS = ['BTS', 'BLACKPINK', 'IU', 'AESPA', 'EXO', 'NEWJEANS', 'TWICE', 'SEVENTEEN'];
 function labelSprite(text: string): THREE.Sprite {
   const c = document.createElement('canvas');
@@ -335,24 +450,29 @@ function labelSprite(text: string): THREE.Sprite {
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, opacity: 0.9, depthWrite: false }));
-  s.scale.set(150, 20.5, 1);
+  s.scale.set(190, 26, 1);
   s.renderOrder = 8;
   return s;
+}
+// knots sit in the BRIGHT swells between dust lanes
+const brightRadii: number[] = [];
+for (let x = 0.18; x < 0.95; x += 0.004) {
+  if (bandAt(x) > 0.75) brightRadii.push(x);
 }
 const knotGroup = new THREE.Group();
 galaxy.add(knotGroup);
 ARTISTS.forEach((name, i) => {
-  const t = 0.2 + (i / ARTISTS.length) * 0.72;
-  const arm = i % 2;
-  const theta = arm * Math.PI + t * TURNS + (Math.random() - 0.5) * 0.12;
-  const r = R * (0.05 + 0.95 * Math.pow(t, 1.38));
+  const r01 = brightRadii.length
+    ? brightRadii[Math.floor((i / ARTISTS.length) * brightRadii.length)]
+    : 0.25 + (i / ARTISTS.length) * 0.6;
+  const theta = (i / ARTISTS.length) * Math.PI * 2 + Math.random() * 0.5;
+  const r = r01 * R;
   const knot = new THREE.Group();
   knot.position.set(Math.cos(theta) * r, 0, Math.sin(theta) * r);
-  const g1 = coreSprite('#fff2dc', 34 + Math.random() * 18, 0.75);
-  const g2 = coreSprite('#ffe0b4', 80 + Math.random() * 26, 0.22);
-  knot.add(g1, g2);
+  knot.add(coreSprite('#fff2dc', 34 + Math.random() * 18, 0.75));
+  knot.add(coreSprite('#ffe0b4', 80 + Math.random() * 26, 0.22));
   const lbl = labelSprite(name);
-  lbl.position.y = 30;
+  lbl.position.y = 34;
   knot.add(lbl);
   (knot as any).__theta = theta; (knot as any).__r = r;
   knotGroup.add(knot);
@@ -383,7 +503,6 @@ ARTISTS.forEach((name, i) => {
     opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending,
   });
   scene.add(new THREE.Points(geo, mat));
-  // ghost neighbor galaxies
   for (let i = 0; i < 5; i++) {
     const s = coreSprite(i % 2 ? '#c9c2b2' : '#aab2c9', 90 + Math.random() * 130, 0.05, true);
     const th = Math.random() * Math.PI * 2;
@@ -406,14 +525,13 @@ const VIEWS = {
     label: 'EDGE — 盘中行者',
   },
   HERO: {
-    // 49° elevation, pulled back — the full tilted oval with visible arms
     pos: new THREE.Vector3(
       2.35 * R * Math.sin(0.72) * Math.cos(2.35),
       2.35 * R * Math.cos(0.72),
       2.35 * R * Math.sin(0.72) * Math.sin(2.35)
     ),
     look: new THREE.Vector3(0, 0, 0),
-    up: new THREE.Vector3(0.26, 1, 0).normalize(), // banked horizon → Andromeda diagonal
+    up: new THREE.Vector3(0.26, 1, 0).normalize(),
     fov: 42,
     label: 'HERO — 安德洛墨达构图',
   },
@@ -421,7 +539,7 @@ const VIEWS = {
 let current: ViewName = 'EDGE';
 let flying = false;
 const lookNow = VIEWS.EDGE.look.clone();
-camera.position.copy(VIEWS.EDGE.pos).multiplyScalar(1.5); // intro starts further out
+camera.position.copy(VIEWS.EDGE.pos).multiplyScalar(1.5);
 camera.up.copy(VIEWS.EDGE.up);
 camera.fov = VIEWS.EDGE.fov;
 camera.updateProjectionMatrix();
@@ -436,7 +554,6 @@ function flyTo(view: ViewName, duration: number, onDone?: () => void) {
   modeEl.textContent = target.label;
   const p0 = camera.position.clone();
   const p2 = target.pos.clone();
-  // arc control point: lift above the disk for edge↔hero grandeur
   const p1 = p0.clone().add(p2).multiplyScalar(0.5);
   p1.y += view === 'HERO' ? R * 0.9 : R * 0.55;
   const curve = new THREE.QuadraticBezierCurve3(p0, p1, p2);
@@ -463,8 +580,7 @@ function flyTo(view: ViewName, duration: number, onDone?: () => void) {
   });
 }
 
-// opening: distant edge glide in → hold → sweep up to the hero reveal.
-// flying=true keeps the idle loop's position pinning out of the way.
+// opening: distant edge glide in → hold → sweep up to the hero reveal
 {
   flying = true;
   const from = camera.position.clone();
@@ -482,7 +598,6 @@ function flyTo(view: ViewName, duration: number, onDone?: () => void) {
 
 addEventListener('click', () => flyTo(current === 'EDGE' ? 'HERO' : 'EDGE', 3.0));
 
-// subtle mouse parallax
 const par = { x: 0, y: 0 };
 addEventListener('pointermove', (e) => {
   par.x = (e.clientX / innerWidth - 0.5) * 2;
@@ -501,17 +616,16 @@ function frame() {
   ((galaxy as any).__starMat as THREE.ShaderMaterial).uniforms.uTime.value = t;
   (gasLayer.material as THREE.ShaderMaterial).uniforms.uTime.value = t;
   (dustLayer.material as THREE.ShaderMaterial).uniforms.uTime.value = t;
+  plate.uniforms.uTime.value = t;
 
-  // knots ride the density wave so labels stay glued to their clusters
   knotGroup.children.forEach((k) => {
     const th0 = (k as any).__theta as number;
     const r = (k as any).__r as number;
-    const w = 0.028 + 0.05 / (Math.sqrt(r * 0.02) + 1);
+    const w = 0.016 + 0.045 / (Math.sqrt(r * 0.02) + 1);
     const th = th0 + t * w;
     k.position.set(Math.cos(th) * r, 0, Math.sin(th) * r);
   });
 
-  // parallax breathes around the current view
   parNow.x += (par.x - parNow.x) * 0.04;
   parNow.y += (par.y - parNow.y) * 0.04;
   camOffset.set(parNow.x * 14, -parNow.y * 9, parNow.x * 6);
@@ -519,7 +633,6 @@ function frame() {
     const v = VIEWS[current];
     camera.position.copy(v.pos).add(camOffset);
     if (current === 'HERO') {
-      // majestic idle drift
       const drift = t * 0.011;
       camera.position.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(drift) * 0.05);
     }
@@ -536,7 +649,6 @@ addEventListener('resize', () => {
   composer.setSize(innerWidth, innerHeight);
 });
 
-// fade the hint after first interaction
 addEventListener('click', () => { hintEl.style.opacity = '0.15'; }, { once: true });
 
 // prototype-only debug handle
