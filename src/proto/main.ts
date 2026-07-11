@@ -22,15 +22,25 @@ gsap.ticker.remove(gsap.updateRoot); // manual drive — env-proof
 // ---------------------------------------------------------------- setup
 const stage = document.getElementById('stage')!;
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6)); // volume pass is per-pixel heavy
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
-renderer.setClearColor(0x000000);
+renderer.setClearColor(0x000000, 0); // alpha 0 so the volume RT clears transparent
 stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(78, innerWidth / innerHeight, 0.5, 20000);
+
+// The volume marches in a LOW-RES offscreen target and is composited
+// upscaled — gas is soft, the upscale is invisible, the speedup is ~5x.
+const VOL_SCALE = 0.42;
+const volScene = new THREE.Scene();
+let rtVol = new THREE.WebGLRenderTarget(
+  Math.max(2, Math.floor(innerWidth * VOL_SCALE * renderer.getPixelRatio())),
+  Math.max(2, Math.floor(innerHeight * VOL_SCALE * renderer.getPixelRatio())),
+  { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter }
+);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
@@ -40,7 +50,7 @@ composer.addPass(new OutputPass());
 
 // ---------------------------------------------------------------- band profile → texture (R: light bands, G: dust lanes)
 const R = 900;
-const H = R * 0.2; // volume slab half-height
+const H = R * 0.12; // volume slab half-height — tight bounds = shorter marches
 
 interface Lane { c: number; w: number; d: number }
 const LANES: Lane[] = [];
@@ -103,7 +113,7 @@ const volumeMat = new THREE.ShaderMaterial({
     uBand: { value: bandTex },
     uR: { value: R },
     uH: { value: H },
-    uSteps: { value: 64 },
+    uSteps: { value: 44 },
   },
   vertexShader: /* glsl */ `
     varying vec3 vWorld;
@@ -134,8 +144,9 @@ const volumeMat = new THREE.ShaderMaterial({
       return mix(mix(mix(a,b,u.x), mix(c,d,u.x), u.y), mix(mix(e,g,u.x), mix(m,n,u.x), u.y), u.z);
     }
     float fbm3(vec3 p){
-      float v = 0.0, a = 0.55;
-      for (int k = 0; k < 3; k++) { v += a * vno3(p); p *= 2.17; a *= 0.5; }
+      // two octaves are enough at the composite's soft upscale
+      float v = 0.6 * vno3(p);
+      v += 0.3 * vno3(p * 2.17);
       return v;
     }
 
@@ -206,15 +217,20 @@ const volumeMat = new THREE.ShaderMaterial({
         float thick = mix(0.045, 0.013, smoothstep(0.0, 0.45, r01)) + 0.03 * exp(-r01 * 7.0);
         float vert = exp(-abs(p.y) / (uR * thick) * 2.1);
 
+        // luminous core yolk — bright but never a white wall
+        float coreGlow = exp(-length(vec3(p.x, p.y * 2.8, p.z)) / (uR * 0.16)) * 1.6 * smoothstep(0.55, 0.15, r01);
+
+        // EMPTY-SPACE SKIP: most of the box contributes nothing — bail out
+        // before paying for any noise
+        float baseline = radial * vert;
+        if (baseline < 0.004 && coreGlow < 0.01) continue;
+
         // ring-streaked marbling
         vec3 ps = shear(p, r01);
         float marble = fbm3(ps * (2.6 / uR) * 3.0 + vec3(0.0, 3.7, 0.0));
-        float marble2 = fbm3(ps * (2.6 / uR) * 9.0 + vec3(5.2));
+        float marble2 = vno3(ps * (2.6 / uR) * 11.0 + vec3(5.2));
 
-        float density = radial * vert * (0.3 + 1.05 * band.r) * (0.3 + 0.95 * marble);
-
-        // luminous core yolk — bright but never a white wall
-        float coreGlow = exp(-length(vec3(p.x, p.y * 2.8, p.z)) / (uR * 0.16)) * 1.6 * smoothstep(0.55, 0.15, r01);
+        float density = baseline * (0.3 + 1.05 * band.r) * (0.3 + 0.95 * marble);
 
         // dust: dark absorbing lanes hugging the mid-plane, broken by noise
         float dustVert = exp(-abs(p.y) / (uR * 0.012) * 2.4);
@@ -239,8 +255,32 @@ const volumeMat = new THREE.ShaderMaterial({
   `,
 });
 const volume = new THREE.Mesh(new THREE.BoxGeometry(R * 2.12, H * 2, R * 2.12), volumeMat);
-volume.renderOrder = 5;
-scene.add(volume);
+volScene.add(volume); // marched offscreen at low res
+
+// composite the upscaled volume over the star field (premultiplied over)
+const compositeQuad = new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.OneFactor,
+    blendDst: THREE.OneMinusSrcAlphaFactor,
+    uniforms: { tVol: { value: rtVol.texture } },
+    vertexShader: /* glsl */ `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform sampler2D tVol; varying vec2 vUv;
+      void main() { gl_FragColor = texture2D(tVol, vUv); }
+    `,
+  })
+);
+compositeQuad.frustumCulled = false;
+compositeQuad.renderOrder = 5;
+scene.add(compositeQuad);
 
 // hot center — a small sprite feeds the bloom a clean highlight
 function coreSprite(color: string, scale: number, opacity: number, flat = false): THREE.Sprite {
@@ -428,9 +468,19 @@ addEventListener('pointermove', (e) => {
 const clock = new THREE.Clock();
 const parNow = { x: 0, y: 0 };
 const camOffset = new THREE.Vector3();
+let volTick = false;
+// in-loop FPS probe (injected rAF doesn't fire in this embedded browser)
+let fpsN = 0;
+let fpsT = performance.now();
 
-function frame() {
-  requestAnimationFrame(frame);
+function tick() {
+  fpsN++;
+  const nowMs = performance.now();
+  if (nowMs - fpsT >= 1000) {
+    (window as any).__fps = Math.round((fpsN * 1000) / (nowMs - fpsT));
+    fpsN = 0;
+    fpsT = nowMs;
+  }
   const t = clock.getElapsedTime();
   gsap.updateRoot(t);
   volumeMat.uniforms.uTime.value = t;
@@ -454,15 +504,50 @@ function frame() {
     }
   }
   camera.lookAt(lookNow);
+
+  // march the volume offscreen — every frame in flight, every 2nd at idle
+  // (the shear drifts at 0.012 rad/s; a 33ms hold is invisible)
+  const cost0 = performance.now();
+  volTick = !volTick;
+  if (flying || volTick) {
+    renderer.setRenderTarget(rtVol);
+    renderer.clear();
+    renderer.render(volScene, camera);
+    renderer.setRenderTarget(null);
+  }
+
   composer.render();
+  // exponential moving average of the CPU-side frame cost — a rate-independent
+  // performance probe (this embedded browser starves rAF, so fps alone lies)
+  const cost = performance.now() - cost0;
+  (window as any).__frameMs = ((window as any).__frameMs ?? cost) * 0.9 + cost * 0.1;
+}
+
+let lastTick = performance.now();
+function frame() {
+  lastTick = performance.now();
+  requestAnimationFrame(frame);
+  tick();
 }
 frame();
+// rAF watchdog: some environments (embedded/background tabs) starve rAF —
+// keep the show running on a timer until real frames come back
+setInterval(() => {
+  if (performance.now() - lastTick > 250) {
+    lastTick = performance.now();
+    tick();
+  }
+}, 66);
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  rtVol.setSize(
+    Math.max(2, Math.floor(innerWidth * VOL_SCALE * renderer.getPixelRatio())),
+    Math.max(2, Math.floor(innerHeight * VOL_SCALE * renderer.getPixelRatio()))
+  );
 });
 
 addEventListener('click', () => { hintEl.style.opacity = '0.15'; }, { once: true });
