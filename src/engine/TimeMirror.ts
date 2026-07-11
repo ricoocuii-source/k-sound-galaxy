@@ -69,7 +69,7 @@ const PLANE_FRAG = /* glsl */ `
   uniform float uBass;
   uniform float uHighs;
   uniform float uOpacity;
-  uniform float uForm;                    // 0 hidden -> 1 revealed from center
+  uniform float uReveal;                  // 0 hidden behind the dust -> 1 fully developed
   uniform vec4 uRipples[${MAX_RIPPLES}];  // (u, v, startTime, strength)
   varying vec2 vUv;
 
@@ -100,6 +100,14 @@ const PLANE_FRAG = /* glsl */ `
       fbm(vUv * 3.0 + uTime * 0.07),
       fbm(vUv * 3.0 - uTime * 0.055 + 7.3)
     ) - 0.5;
+
+    // ---- develop-under-dust (opening): the lens is born as pure grain dust;
+    // when the cover is ready the veil blows away and the image fades up
+    // patchily beneath it. Pure noise threshold — no geometric wipe, no
+    // centre-out pattern. uReveal 1 -> exactly the steady-state image. ----
+    float g = fbm(vUv * 9.0 + 3.1);
+    float reveal = smoothstep(g - 0.35, g + 0.35, uReveal * 1.7 - 0.35);
+
     vec2 texUv = vUv + flow * flowZone * (0.022 + uBass * 0.014);
     texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
 
@@ -126,10 +134,6 @@ const PLANE_FRAG = /* glsl */ `
     float band = smoothstep(0.62, 1.06, ee);
     edgeFade = max(edgeFade, (1.0 - band) * step(band, grain) * 0.6);
 
-    // ---- radial reveal (opening: the image develops from the center) ----
-    float revealR = uForm * 1.28;
-    float reveal = smoothstep(revealR + 0.09, revealR - 0.10, e + (swirl - 0.5) * 0.16);
-
     float alpha = edgeFade * reveal * uOpacity;
     if (alpha < 0.004) discard;
 
@@ -154,9 +158,11 @@ const RIM_VERT = /* glsl */ `
   uniform vec4 uRipples[${MAX_RIPPLES}]; // (u, v, startTime, strength) — same waves as the plane
   uniform float uPixelRatio;
   uniform float uAspect;
-  attribute vec2 aHome;   // uv-space rest position (in the rim band)
+  uniform float uVeil;    // 1 interior dust covers the image .. 0 blown away
+  attribute vec2 aHome;   // uv-space rest position (band or interior)
   attribute float aRand;
   attribute float aEdge;  // 0 inner band edge .. 1 outer plume tip
+  attribute float aInner; // 1 = interior veil dust (covers the image area)
   varying vec3 vColor;
   varying float vAlpha;
 
@@ -217,6 +223,15 @@ const RIM_VERT = /* glsl */ `
 
     pos = mix(scatter, pos, formT);
 
+    // interior veil dust: while the cover has nothing to show, these grains
+    // ARE the lens body. When the cover develops (uVeil -> 0) each grain is
+    // carried off on its own gust — staggered departure, drifting out and up,
+    // like dust blown off a surface.
+    float gone = aInner * smoothstep(aRand * 0.5, aRand * 0.5 + 0.5, 1.0 - uVeil);
+    vec2 blowDir = normalize(outDir * 0.7 + vec2(hash21(vec2(aRand, 3.3)) - 0.35, hash21(vec2(aRand, 6.1)) - 0.2) + 1e-4);
+    pos.xy += blowDir * gone * (9.0 + 15.0 * r1);
+    pos.z += gone * (2.5 + 4.0 * r2);
+
     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
 
@@ -245,7 +260,10 @@ const RIM_VERT = /* glsl */ `
     // the cloud's own outline is ragged too.
     float profile = smoothstep(0.0, 0.25, aEdge) * (1.0 - 0.9 * smoothstep(0.45, 1.0, aEdge));
     profile *= clamp(1.0 + contour * 1.3, 0.55, 1.5);
-    vAlpha = uOpacity * profile * (0.3 + 0.7 * formT) * 0.5;
+    // interior dust keeps its own steady density while veiled, fades as it departs
+    float innerProfile = 0.5 + 0.35 * hash21(vec2(aRand, 2.2));
+    profile = mix(profile, innerProfile, aInner);
+    vAlpha = uOpacity * profile * (0.3 + 0.7 * formT) * 0.5 * (1.0 - gone);
   }
 `;
 
@@ -280,6 +298,10 @@ export class TimeMirror {
   private rippleIndex = 0;
   private fallbackTex: THREE.Texture;
   private texEpoch = 0; // bumped on every setTexture; guards close()'s deferred wipe
+  private lastTime = 0;
+  private openAt = 0;
+  private unveilStarted = false;
+  private hasTexture = false;
   public isOpen = false;
 
   constructor(haloTexture: THREE.Texture) {
@@ -308,7 +330,7 @@ export class TimeMirror {
         uBass: { value: 0 },
         uHighs: { value: 0 },
         uOpacity: { value: 0 },
-        uForm: { value: 0 },
+        uReveal: { value: 0 },
         uRipples: { value: this.ripples },
       },
     });
@@ -324,6 +346,7 @@ export class TimeMirror {
     const homes: number[] = [];
     const rands: number[] = [];
     const edges: number[] = [];
+    const inners: number[] = [];
     for (let gy = 0; gy < GRID_H; gy++) {
       for (let gx = 0; gx < GRID_W; gx++) {
         const u = (gx + 0.5) / GRID_W + (Math.random() - 0.5) * (0.8 / GRID_W);
@@ -331,10 +354,13 @@ export class TimeMirror {
         const ex = (u - 0.5) / 0.33;
         const ey = (v - 0.5) / 0.43;
         const e = Math.sqrt(ex * ex + ey * ey);
-        if (e < 0.62 || e > 1.35) continue;
+        if (e > 1.35) continue;
+        const inner = e < 0.62; // interior veil dust — the lens body before the cover develops
+        if (inner && Math.random() < 0.2) continue; // keep the veil airy
         homes.push(u, v);
         rands.push(Math.random());
-        edges.push(THREE.MathUtils.clamp((e - 0.62) / (1.35 - 0.62), 0, 1));
+        edges.push(inner ? 0 : THREE.MathUtils.clamp((e - 0.62) / (1.35 - 0.62), 0, 1));
+        inners.push(inner ? 1 : 0);
       }
     }
     const COUNT = rands.length;
@@ -343,6 +369,7 @@ export class TimeMirror {
     geo.setAttribute('aHome', new THREE.BufferAttribute(new Float32Array(homes), 2));
     geo.setAttribute('aRand', new THREE.BufferAttribute(new Float32Array(rands), 1));
     geo.setAttribute('aEdge', new THREE.BufferAttribute(new Float32Array(edges), 1));
+    geo.setAttribute('aInner', new THREE.BufferAttribute(new Float32Array(inners), 1));
     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
 
     this.rimMat = new THREE.ShaderMaterial({
@@ -356,6 +383,7 @@ export class TimeMirror {
         uHasMap: { value: 0 },
         uTime: { value: 0 },
         uForm: { value: 0 },
+        uVeil: { value: 1 },
         uOpacity: { value: 0 },
         uBass: { value: 0 },
         uHighs: { value: 0 },
@@ -408,15 +436,21 @@ export class TimeMirror {
 
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uForm, pm.uOpacity, rm.uForm, rm.uOpacity]);
-    // grains assemble first, then the image develops from the center outward —
-    // compressed so the whole reveal finishes during the camera flight and the
-    // lens is complete before the user's viewpoint settles
+    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil]);
+    // the lens is BORN AS PURE GRAIN DUST — the whole particle body (band +
+    // interior veil) assembles during the flight. The cover develops only
+    // once its texture is ready: the veil blows away and the image fades up
+    // beneath it (scheduleUnveil).
+    pm.uReveal.value = 0;
+    rm.uVeil.value = 1;
+    this.unveilStarted = false;
+    this.openAt = this.lastTime;
     gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 1.25, ease: 'expo.out' });
     gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.5, ease: 'power2.out' });
-    gsap.fromTo(pm.uForm, { value: 0 }, { value: 1, duration: 1.05, ease: 'power2.inOut', delay: 0.3 });
     gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.55, ease: 'power2.out', delay: 0.25 });
     gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 1.1 });
+    // texture already loaded (cached cover): unveil once the dust body has formed
+    if (this.hasTexture) this.scheduleUnveil(1.0);
   }
 
   close(onDone?: () => void) {
@@ -424,8 +458,8 @@ export class TimeMirror {
     this.isOpen = false;
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uForm, pm.uOpacity, rm.uForm, rm.uOpacity]);
-    gsap.to(pm.uForm, { value: 0, duration: 0.75, ease: 'power2.in' });
+    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil]);
+    gsap.to(pm.uReveal, { value: 0, duration: 0.5, ease: 'power2.in' });
     gsap.to(rm.uForm, { value: 0, duration: 0.9, ease: 'power2.in' });
     gsap.to(this.halo.material as THREE.SpriteMaterial, { opacity: 0, duration: 0.5 });
     const epochAtClose = this.texEpoch;
@@ -439,6 +473,13 @@ export class TimeMirror {
         // out — otherwise a fast (cached) cover for the NEXT song would be
         // erased by this deferred callback and the mirror would open empty.
         if (this.texEpoch === epochAtClose) this.setTexture(null);
+        // reset to a dust body for the next opening — unless a newer open()
+        // already took over (isOpen flipped back to true)
+        if (!this.isOpen) {
+          pm.uReveal.value = 0;
+          rm.uVeil.value = 1;
+          this.unveilStarted = false;
+        }
         onDone?.();
       },
     });
@@ -446,6 +487,7 @@ export class TimeMirror {
 
   setTexture(tex: THREE.Texture | null) {
     this.texEpoch++;
+    this.hasTexture = !!tex;
     const target = tex || this.fallbackTex;
     this.mirrorMat.uniforms.uMap.value = target;
     this.rimMat.uniforms.uMap.value = target;
@@ -453,10 +495,29 @@ export class TimeMirror {
       gsap.to([this.mirrorMat.uniforms.uHasMap, this.rimMat.uniforms.uHasMap], {
         value: 1, duration: 1.0, ease: 'power2.inOut',
       });
+      // the cover is ready — let the dust body finish forming, then blow the
+      // veil away and develop the image beneath it
+      if (this.isOpen && !this.unveilStarted) {
+        this.scheduleUnveil(Math.max(0.15, 1.0 - (this.lastTime - this.openAt)));
+      }
     } else {
       this.mirrorMat.uniforms.uHasMap.value = 0;
       this.rimMat.uniforms.uHasMap.value = 0;
+      gsap.killTweensOf([this.mirrorMat.uniforms.uReveal, this.rimMat.uniforms.uVeil]);
+      this.mirrorMat.uniforms.uReveal.value = 0;
+      this.rimMat.uniforms.uVeil.value = 1;
+      this.unveilStarted = false;
     }
+  }
+
+  /** Blow the interior dust away and develop the cover beneath it. */
+  private scheduleUnveil(delay: number) {
+    this.unveilStarted = true;
+    const pm = this.mirrorMat.uniforms;
+    const rm = this.rimMat.uniforms;
+    gsap.killTweensOf([pm.uReveal, rm.uVeil]);
+    gsap.to(rm.uVeil, { value: 0, duration: 1.6, ease: 'power2.inOut', delay });
+    gsap.to(pm.uReveal, { value: 1, duration: 1.4, ease: 'power2.inOut', delay: delay + 0.15 });
   }
 
   /**
@@ -473,6 +534,7 @@ export class TimeMirror {
   }
 
   update(time: number, audio: AudioLevels, camera: THREE.Camera) {
+    this.lastTime = time;
     if (!this.group.visible) return;
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
