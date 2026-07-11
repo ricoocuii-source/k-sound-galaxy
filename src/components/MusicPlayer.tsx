@@ -124,9 +124,9 @@ export default function MusicPlayer({ activeSong, isPlaying, trackInfo, isLoadin
         <button
           onClick={handlePlayClick}
           disabled={!activeSong || noPreview}
-          className={`w-9 h-9 rounded-full border flex items-center justify-center transition-all shrink-0 ${
+          className={`w-9 h-9 rounded-full border flex items-center justify-center transition-all duration-200 shrink-0 ${
             activeSong && !noPreview
-              ? 'border-[#e8e0d2]/50 text-[#e8e0d2]/85 hover:border-[#e8e0d2] hover:text-[#e8e0d2] cursor-pointer'
+              ? 'border-[#e8e0d2]/50 text-[#e8e0d2]/85 hover:border-[#e8e0d2] hover:text-[#e8e0d2] hover:scale-105 cursor-pointer'
               : 'border-[#e8e0d2]/12 text-[#e8e0d2]/20 cursor-not-allowed'
           }`}
           title={noPreview ? 'Preview unavailable' : isPlaying ? 'Pause' : 'Play'}

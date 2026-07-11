@@ -240,7 +240,7 @@ export default function InsightPanel({
                       <button
                         key={node.id}
                         onClick={() => onSelectNode(node)}
-                        className="flex items-center gap-2.5 text-left text-[#e8e0d2]/60 hover:text-[#e8e0d2] transition-colors cursor-pointer w-fit"
+                        className="flex items-center gap-2.5 text-left text-[#e8e0d2]/60 hover:text-[#e8e0d2] hover:translate-x-0.5 transition-all duration-200 cursor-pointer w-fit"
                       >
                         <span
                           className="w-1.5 h-1.5 rounded-full shrink-0"

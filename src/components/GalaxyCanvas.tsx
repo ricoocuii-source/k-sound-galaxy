@@ -207,7 +207,7 @@ export default function GalaxyCanvas({
       {/* cinematic vignette — reaches further toward center to keep the void deep */}
       <div
         className="absolute inset-0 z-10 pointer-events-none"
-        style={{ background: 'radial-gradient(ellipse at center, transparent 34%, rgba(5,6,10,0.28) 68%, rgba(5,6,10,0.82) 100%)' }}
+        style={{ background: 'radial-gradient(ellipse at center, transparent 30%, rgba(5,6,10,0.34) 66%, rgba(5,6,10,0.9) 100%)' }}
       />
 
       {/* film grain */}

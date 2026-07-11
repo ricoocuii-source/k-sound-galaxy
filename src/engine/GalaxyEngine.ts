@@ -66,10 +66,12 @@ interface NebulaEntry {
   hit: THREE.Mesh;
   label: HTMLDivElement;
   labelName: HTMLDivElement;
-  labelSub: HTMLDivElement;
   baseCoreScale: number;
   diskRadius: number;
   armPhase: number;        // spiral arm azimuth offset (song stars sit on the arms)
+  armCount: number;        // per-artist morphology (2 or 3 arms)
+  turns: number;           // per-artist winding
+  rExp: number;            // per-artist radial easing exponent
   spinTime: number;        // accumulated local rotation time (drives shader + song stars)
   spinFactor: { v: number }; // 1 = rotating, tweens to 0 when a song is selected
   hoverT: number;
@@ -245,6 +247,8 @@ const MISTDISK_FRAG = /* glsl */ `
   uniform float uOpacity;
   uniform float uArmPhase;
   uniform float uTurns;
+  uniform float uArmCount;   // per-artist morphology: 2 or 3 arms
+  uniform float uRExpInv;    // inverse of the per-artist radial easing exponent
   uniform float uRadius;     // world disk radius (for the Keplerian rate)
   uniform float uSeed;
   uniform vec3 uCore;
@@ -286,17 +290,17 @@ const MISTDISK_FRAG = /* glsl */ `
     if (rn > 1.0) discard;
     float theta = atan(p.y, p.x);
 
-    // same arm parameterization as the particles (radius eased by ARM_R_EXP;
-    // 0.7407 = 1/1.35 inverts it). The pattern rotates as a RIGID density wave
+    // same arm parameterization as the particles (per-artist radial easing,
+    // inverted via uRExpInv). The pattern rotates as a RIGID density wave
     // (real spiral arms don't wind up) — shear lives in the particle layers.
-    float t = pow(clamp((rn - 0.13) / 0.87, 0.0, 1.0), 0.7407);
+    float t = pow(clamp((rn - 0.13) / 0.87, 0.0, 1.0), uRExpInv);
     float wRigid = 1.6 / (sqrt(0.55 * uRadius) + 2.0);
     float armCenter = uArmPhase + t * uTurns + uSpinTime * wRigid;
 
-    // two arms: bright ridge every PI. Narrow band — the gaps between arms
+    // bright ridge once per arm. Narrow band — the gaps between arms
     // must stay BLACK (that contrast is where the depth lives)
     float d = theta - armCenter;
-    float armWave = cos(2.0 * d);
+    float armWave = cos(uArmCount * d);
     // noise-carved gas: arm band + marbled detail
     float n1 = fbm(vec2(theta * 1.6 + uSeed, rn * 5.5 - uSeed));
     float n2 = fbm(vec2(theta * 4.0 - uSeed * 2.0, rn * 11.0 + uSeed) + uSpinTime * 0.015);
@@ -503,13 +507,21 @@ function makeStarSpikeTexture(): THREE.Texture {
   return tex;
 }
 
-const OVERVIEW_RADIUS = 1020;
+const OVERVIEW_RADIUS = 1360; // frames all three depth bands of the tiered layout
 const ARTIST_RADIUS = 250;
+
+// Cinematic hierarchy: legendary acts anchor the bright foreground, the mid
+// guard fills the middle field, rookies drift smaller in the deep background.
+// Uniform size was the single biggest "rubber-stamp" tell in the overview.
+const TIER_HERO = new Set(['bts', 'blackpink', 'iu', 'exo', 'bigbang', 'twice']);
+const TIER_ROOKIE = new Set(['babymonster', 'ive', 'lesserafim', 'itzy', 'newjeans']);
+type Tier = 'hero' | 'mid' | 'rookie';
+const tierOf = (id: string): Tier =>
+  TIER_HERO.has(id) ? 'hero' : TIER_ROOKIE.has(id) ? 'rookie' : 'mid';
+const TIER_SCALE: Record<Tier, number> = { hero: 1.34, mid: 1.0, rookie: 0.72 };
 const SONG_DISTANCE = 82;
 const ARM_TURNS = Math.PI * 1.05; // gentle ~half-turn per arm — no ring stacking
 /** Radius easing along the arm: inner tight, outer spacing widens (log-spiral feel). */
-const ARM_R_EXP = 1.35;
-const armRadius = (t: number) => 0.13 + 0.87 * Math.pow(t, ARM_R_EXP);
 /**
  * Angular speed used by BOTH the GPU cloud and CPU song stars.
  * Mostly-rigid density-wave rotation with a whisper of Keplerian shear —
@@ -539,8 +551,8 @@ export class GalaxyEngine {
 
   // camera rig
   private lookTarget = new THREE.Vector3(0, 0, 0);
-  private sph = { theta: -0.55, phi: 1.02, radius: OVERVIEW_RADIUS };
-  private sphTarget = { theta: -0.55, phi: 1.02, radius: OVERVIEW_RADIUS };
+  private sph = { theta: -0.55, phi: 0.95, radius: OVERVIEW_RADIUS };
+  private sphTarget = { theta: -0.55, phi: 0.95, radius: OVERVIEW_RADIUS };
   private rollAngle = { v: 0 };
   private flying = false;
   private lastInteraction = 0;
@@ -792,6 +804,28 @@ export class GalaxyEngine {
       this.scene.add(glint);
     }
 
+    // --- mid-field depth haze: huge ultra-faint cool veils drifting between
+    // the tier bands. They read as atmosphere: layers slide past each other
+    // during camera moves and the parallax sells true depth. ---
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + Math.random();
+      const rr = 480 + Math.random() * 720;
+      const veil = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: this.smokeTex,
+          color: new THREE.Color(i % 3 === 0 ? '#6b7186' : '#565b6c'),
+          transparent: true,
+          opacity: 0.014 + Math.random() * 0.014,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          rotation: Math.random() * Math.PI * 2,
+        })
+      );
+      veil.position.set(Math.cos(a) * rr, -160 + Math.random() * 320, Math.sin(a) * rr);
+      veil.scale.setScalar(500 + Math.random() * 460);
+      this.scene.add(veil);
+    }
+
     // --- out-of-focus bokeh dust (near-field depth, Penderecki style) ---
     const BOKEH_COUNT = 42;
     const bPos = new Float32Array(BOKEH_COUNT * 3);
@@ -857,12 +891,19 @@ export class GalaxyEngine {
     };
     const gauss = () => rand() + rand() + rand() - 1.5;
 
-    const R = 64 + rand() * 30; // disk radius 64..94
+    const R = (58 + rand() * 26) * TIER_SCALE[tierOf(def.id)]; // tiered disk radius
 
-    // disk tilt: interleaved 3D orientation (like the reference collage)
+    // disk tilt: interleaved 3D orientation, wider range for cinematic drama
     const tiltAxis = new THREE.Vector3(Math.cos(rand() * Math.PI * 2), 0, Math.sin(rand() * Math.PI * 2)).normalize();
-    const tiltAngle = 0.18 + rand() * 0.55; // 10°..42°
+    const tiltAngle = 0.15 + rand() * 0.75; // 9°..52°
     group.quaternion.setFromAxisAngle(tiltAxis, tiltAngle);
+
+    // per-artist morphology: arm count, winding and radial easing all vary so
+    // no two galaxies read as the same stamped asset
+    const ARM_COUNT = rand() < 0.28 ? 3 : 2;
+    const TURNS = ARM_TURNS * (0.8 + rand() * 0.75);
+    const rExp = 1.18 + rand() * 0.4;
+    const armR = (t: number) => 0.13 + 0.87 * Math.pow(t, rExp);
 
     // ---- spiral-disk particles (stars are the seasoning; mist is the dish) ----
     const COUNT = 3400;
@@ -881,9 +922,8 @@ export class GalaxyEngine {
     const cDeep = new THREE.Color(palette.deep);
     const tmp = new THREE.Color();
 
-    const ARM_COUNT = 2;
-    const TURNS = ARM_TURNS;
     const armPhase = rand() * Math.PI * 2;
+    const armSep = (Math.PI * 2) / ARM_COUNT; // correct spacing for 2 AND 3 arms
 
     for (let i = 0; i < COUNT; i++) {
       const kind = i / COUNT; // 0..0.15 bulge, 0.15..0.77 arms, 0.77..1 dust
@@ -895,15 +935,15 @@ export class GalaxyEngine {
         theta = rand() * Math.PI * 2;
         h = gauss() * R * 0.045;
         size = 1.0 + rand() * 2.1;
-        bright = 0.85 + rand() * 0.6;
+        bright = 1.0 + rand() * 0.7; // hotter core → stronger cinematic light ratio
         tmp.copy(cCore).lerp(cArm, rand() * 0.25);
       } else if (kind < 0.77) {
         // spiral arms — radius eased so outer windings spread apart (log feel)
         const arm = i % ARM_COUNT;
         const t = Math.sqrt(rand()); // denser toward the center
-        r = R * armRadius(t);
+        r = R * armR(t);
         const spread = (0.11 + 0.2 * t) * (1 + Math.abs(gauss()) * 0.4);
-        theta = armPhase + arm * Math.PI + t * TURNS + gauss() * spread;
+        theta = armPhase + arm * armSep + t * TURNS + gauss() * spread;
         h = gauss() * R * 0.028 * (1 + t * 1.1);
         size = 0.85 + rand() * 2.4;
         bright = 0.4 + rand() * 0.45;
@@ -923,8 +963,8 @@ export class GalaxyEngine {
         // dark dust lanes hugging the inner edge of the arms — soft, dim, large
         const arm = i % ARM_COUNT;
         const t = 0.18 + 0.82 * Math.sqrt(rand());
-        r = R * armRadius(t) * (0.96 + rand() * 0.04);
-        theta = armPhase + arm * Math.PI + t * TURNS - 0.13 + gauss() * 0.07;
+        r = R * armR(t) * (0.96 + rand() * 0.04);
+        theta = armPhase + arm * armSep + t * TURNS - 0.13 + gauss() * 0.07;
         h = gauss() * R * 0.02 * (1 + t);
         size = 2.2 + rand() * 3.2;
         bright = 0.16 + rand() * 0.16;
@@ -987,10 +1027,10 @@ export class GalaxyEngine {
       for (let i = 0; i < count; i++) {
         const arm = i % ARM_COUNT;
         const t = dustLayer ? 0.15 + 0.85 * Math.sqrt(rand()) : Math.pow(rand(), 0.85);
-        const r = R * (0.06 + 0.94 * Math.pow(t, ARM_R_EXP));
+        const r = R * (0.06 + 0.94 * Math.pow(t, rExp));
         const spread = dustLayer ? 0.1 + 0.12 * t : 0.16 + 0.22 * t;
         sRadius[i] = r;
-        sTheta[i] = armPhase + arm * Math.PI + t * TURNS + gauss() * spread + (dustLayer ? -0.14 : 0);
+        sTheta[i] = armPhase + arm * armSep + t * TURNS + gauss() * spread + (dustLayer ? -0.14 : 0);
         sHeight[i] = gauss() * R * 0.05 * (0.55 + t);
         // wide size variance: broad beds of mist + small detail wisps
         const big = rand() > 0.6;
@@ -1001,8 +1041,8 @@ export class GalaxyEngine {
         sRot[i] = (rand() - 0.5) * 0.45;
         sVariant[i] = (rand() * 4) | 0;
         if (dustLayer) {
-          tmp.copy(cDust).lerp(cDeep, rand() * 0.7);
-          sAlpha[i] = 0.14 + rand() * 0.12;
+          tmp.copy(cDust).lerp(cDeep, 0.15 + rand() * 0.75);
+          sAlpha[i] = 0.18 + rand() * 0.14; // deeper dark lanes → more contrast
         } else {
           if (t < 0.3) tmp.copy(cCore).lerp(cArm, t / 0.3);
           else tmp.copy(cArm).lerp(cAccent, (t - 0.3) / 0.7);
@@ -1058,7 +1098,9 @@ export class GalaxyEngine {
         uFocus: { value: 0 },
         uOpacity: { value: 0.27 },
         uArmPhase: { value: armPhase },
-        uTurns: { value: ARM_TURNS },
+        uArmCount: { value: ARM_COUNT },
+        uRExpInv: { value: 1 / rExp },
+        uTurns: { value: TURNS },
         uRadius: { value: R },
         uSeed: { value: rand() * 40 },
         uCore: { value: new THREE.Color(CORE_WHITE).multiplyScalar(0.85) },
@@ -1113,14 +1155,11 @@ export class GalaxyEngine {
     const label = document.createElement('div');
     label.className =
       'galaxy-label absolute pointer-events-none select-none text-center will-change-transform';
+    // one quiet editorial caption — no boilerplate sublines, the name carries it
     const labelName = document.createElement('div');
-    labelName.className = 'font-serif font-semibold text-[12.5px] text-[#e8e0d2] uppercase tracking-[0.2em] whitespace-nowrap';
+    labelName.className = 'font-serif text-[11px] text-[#e8e0d2]/90 uppercase tracking-[0.34em] whitespace-nowrap';
     labelName.textContent = def.chineseName ? `${def.name} · ${def.chineseName}` : def.name;
-    const labelSub = document.createElement('div');
-    labelSub.className = 'font-mono text-[8.5px] text-[#e8e0d2]/50 tracking-[0.16em] whitespace-nowrap mt-1';
-    labelSub.textContent = `${def.songs.length} TRACKS`;
     label.appendChild(labelName);
-    label.appendChild(labelSub);
     label.style.opacity = '0';
     this.labelLayer.appendChild(label);
 
@@ -1130,8 +1169,8 @@ export class GalaxyEngine {
       dust: dustLayer.pts, dustMat: dustLayer.mat,
       mist, mistMat,
       core, veil, coreDim: 1, coreDimTarget: 1,
-      hit, label, labelName, labelSub,
-      baseCoreScale, diskRadius: R, armPhase,
+      hit, label, labelName,
+      baseCoreScale, diskRadius: R, armPhase, armCount: ARM_COUNT, turns: TURNS, rExp,
       spinTime: spinTime0, spinFactor: { v: 1 },
       hoverT: 0, dimT: 0, matched: false,
     };
@@ -1141,16 +1180,38 @@ export class GalaxyEngine {
 
   /** Double-arm spiral layout — the one and only constellation arrangement. */
   private computeLayout(): Record<string, THREE.Vector3> {
+    // three depth bands instead of one flat spiral: heroes near and slightly
+    // raised, mids across the middle field, rookies far and sunk low. Golden-
+    // angle placement keeps every band organic (never grid-like).
     const out: Record<string, THREE.Vector3> = {};
-    const N = this.artists.length;
-    this.artists.forEach((a, idx) => {
-      const arm = idx % 2;
-      const t = idx / N;
-      const ang = t * Math.PI * 3.2 + arm * Math.PI;
-      const dist = 260 + t * 800;
+    const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+    const heroes = this.artists.filter((a) => tierOf(a.id) === 'hero');
+    const mids = this.artists.filter((a) => tierOf(a.id) === 'mid');
+    const rookies = this.artists.filter((a) => tierOf(a.id) === 'rookie');
+    heroes.forEach((a, i) => {
+      const ang = i * GOLDEN * 2.35 + 0.7;
+      const dist = 310 + (i % 3) * 115;
       out[a.id] = new THREE.Vector3(
         Math.cos(ang) * dist,
-        Math.sin(idx * 3.7) * 95,
+        20 + Math.sin(i * 2.7) * 55,
+        Math.sin(ang) * dist
+      );
+    });
+    mids.forEach((a, i) => {
+      const ang = i * GOLDEN + 1.9;
+      const dist = 580 + (i % 4) * 95 + i * 7;
+      out[a.id] = new THREE.Vector3(
+        Math.cos(ang) * dist,
+        Math.sin(i * 3.3) * 135,
+        Math.sin(ang) * dist
+      );
+    });
+    rookies.forEach((a, i) => {
+      const ang = i * GOLDEN * 1.7 + 4.1;
+      const dist = 980 + (i % 3) * 135;
+      out[a.id] = new THREE.Vector3(
+        Math.cos(ang) * dist,
+        -170 + Math.sin(i * 2.1) * 110,
         Math.sin(ang) * dist
       );
     });
@@ -1168,19 +1229,19 @@ export class GalaxyEngine {
 
     const starColor = new THREE.Color(nebula.palette.accent).lerp(new THREE.Color('#ffffff'), 0.55);
     const n = def.songs.length;
-    const perArm = Math.ceil(n / 2);
+    const perArm = Math.ceil(n / nebula.armCount);
 
     def.songs.forEach((song, idx) => {
-      const arm = idx % 2;
-      const slot = Math.floor(idx / 2);
+      const arm = idx % nebula.armCount;
+      const slot = Math.floor(idx / nebula.armCount);
       // even spacing along the arm, away from the crowded core
       const t = 0.3 + 0.64 * (perArm <= 1 ? 0.5 : slot / (perArm - 1));
       // scatter within the arm cloud (not a bead chain): banded radius offsets
       // + sideways angular jitter, deterministic per song index
       const j1 = Math.sin(idx * 12.9898) * 0.5 + Math.sin(idx * 4.1) * 0.5; // -1..1
       const j2 = Math.sin(idx * 7.7 + 2.1);
-      const radius = R * armRadius(t) * (1 + ((idx % 3) - 1) * 0.085 + j1 * 0.03);
-      const theta0 = nebula.armPhase + arm * Math.PI + t * ARM_TURNS + j2 * 0.16;
+      const radius = R * (0.13 + 0.87 * Math.pow(t, nebula.rExp)) * (1 + ((idx % 3) - 1) * 0.085 + j1 * 0.03);
+      const theta0 = nebula.armPhase + arm * ((Math.PI * 2) / nebula.armCount) + t * nebula.turns + j2 * 0.16;
       const height = Math.sin(idx * 2.3) * R * 0.035;
 
       const isMajor = (song.radius || 4.5) >= 8;
@@ -1365,7 +1426,8 @@ export class GalaxyEngine {
     if (tangent.lengthSq() < 1e-4) tangent.set(1, 0, 0);
     else tangent.normalize();
     const dir = normal.clone().multiplyScalar(0.9).addScaledVector(tangent, 0.42).normalize();
-    const camEnd = center.clone().addScaledVector(dir, ARTIST_RADIUS);
+    // tiered nebulas need tiered viewing distance (heroes are much larger)
+    const camEnd = center.clone().addScaledVector(dir, Math.max(ARTIST_RADIUS, nebula.diskRadius * 2.7));
 
     this.flyTo(camEnd, center, {
       duration: wasFocused ? 2.2 : 2.4,
@@ -1393,9 +1455,9 @@ export class GalaxyEngine {
     });
 
     const camEnd = new THREE.Vector3(
-      OVERVIEW_RADIUS * Math.sin(1.02) * Math.sin(this.sph.theta),
-      OVERVIEW_RADIUS * Math.cos(1.02),
-      OVERVIEW_RADIUS * Math.sin(1.02) * Math.cos(this.sph.theta)
+      OVERVIEW_RADIUS * Math.sin(0.95) * Math.sin(this.sph.theta),
+      OVERVIEW_RADIUS * Math.cos(0.95),
+      OVERVIEW_RADIUS * Math.sin(0.95) * Math.cos(this.sph.theta)
     );
     this.flyTo(camEnd, new THREE.Vector3(0, 0, 0), {
       duration: 2.0,
@@ -1578,7 +1640,7 @@ export class GalaxyEngine {
         if (tangent.lengthSq() < 1e-4) tangent.set(1, 0, 0);
         else tangent.normalize();
         const dir = normal.clone().multiplyScalar(0.9).addScaledVector(tangent, 0.42).normalize();
-        this.flyTo(center.clone().addScaledVector(dir, ARTIST_RADIUS), center, { duration: 1.5 });
+        this.flyTo(center.clone().addScaledVector(dir, Math.max(ARTIST_RADIUS, nebula.diskRadius * 2.7)), center, { duration: 1.5 });
       }
     }
     if (notify) this.callbacks.onDeselectSong();
@@ -1873,25 +1935,19 @@ export class GalaxyEngine {
       let opacity = 0;
       if (this.screenPos.visible) {
         if (this.mode === 'overview') {
-          opacity = this.searchQuery ? (n.matched ? 1 : 0.22) : isHovered ? 1 : 0.78;
+          // depth-graded captions: near nebulas speak, far ones whisper
+          const dist = this.camera.position.distanceTo(n.group.position);
+          const depthFade = THREE.MathUtils.clamp(1.45 - dist / 1750, 0.3, 1);
+          opacity = this.searchQuery ? (n.matched ? 1 : 0.16) : isHovered ? 1 : 0.72 * depthFade;
         } else {
           // focused mode: show focused + hovered warp targets
-          opacity = isFocused ? 0.95 : isHovered ? 0.9 : 0.3;
+          opacity = isFocused ? 0.95 : isHovered ? 0.9 : 0.28;
         }
         if (this.mode === 'song') opacity = 0; // the mirror carries its own title card
       }
       n.label.style.opacity = String(opacity);
-      n.label.style.transform = `translate(-50%, -50%) translate(${this.screenPos.x}px, ${this.screenPos.y}px) scale(${isHovered || isFocused ? 1.12 : 1})`;
+      n.label.style.transform = `translate(-50%, -50%) translate(${this.screenPos.x}px, ${this.screenPos.y}px) scale(${isHovered || isFocused ? 1.1 : 1})`;
       n.labelName.style.color = n.matched && this.searchQuery ? '#c9b8e8' : isHovered ? '#ffffff' : '';
-      // keep the field quiet: track counts only surface on hover/focus
-      n.labelSub.style.display = isHovered || isFocused ? '' : 'none';
-      n.labelSub.textContent = isFocused
-        ? `${n.def.genre.replace('genre_', '').toUpperCase()} • ${n.def.songs.length} TRACKS`
-        : isHovered && this.mode !== 'overview'
-          ? '⚡ CLICK TO WARP'
-          : isHovered
-            ? 'CLICK TO ENTER'
-            : `${n.def.songs.length} TRACKS`;
     });
 
     this.planets.forEach((p, id) => {
