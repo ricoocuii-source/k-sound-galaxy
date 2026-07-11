@@ -63,8 +63,9 @@ function extractCoverAccent(image: HTMLImageElement | undefined): string | null 
     const col = new THREE.Color(best.r / best.w, best.g / best.w, best.b / best.w);
     const hsl = { h: 0, s: 0, l: 0 };
     col.getHSL(hsl);
-    // calm it down: keep the hue, tame saturation, fix an airy lightness
-    col.setHSL(hsl.h, Math.min(0.42, Math.max(0.22, hsl.s * 0.7)), 0.68);
+    // calm it down: keep the hue, tame saturation, fix an airy lightness —
+    // but leave enough chroma to survive the additive-blend bleaching
+    col.setHSL(hsl.h, Math.min(0.52, Math.max(0.28, hsl.s * 0.8)), 0.64);
     return `#${col.getHexString()}`;
   } catch {
     return null;

@@ -249,9 +249,10 @@ const RIM_VERT = /* glsl */ `
     // 85% desaturate → then pull hard toward the dust tone. The tone itself
     // leans from cool silver toward the COVER's dominant color once known, so
     // dust / artwork / nebula share one hue family instead of clashing.
+    // (additive stacking bleaches hue, so the lean must be strong to survive)
     vec3 col = mix(vec3(lum), src, 0.3);
-    vec3 dustTone = mix(vec3(0.80, 0.83, 0.92), uAccent, 0.4 * uAccentAmt);
-    col = mix(col, dustTone, 0.45);
+    vec3 dustTone = mix(vec3(0.80, 0.83, 0.92), uAccent, 0.75 * uAccentAmt);
+    col = mix(col, dustTone, 0.6);
     col = min(col * (0.42 + uHighs * 0.15 + max(rippleSum, 0.0) * 0.2), vec3(0.7)); // faint, capped low
 
     float att = 300.0 / max(1.0, -mv.z);
@@ -540,9 +541,13 @@ export class TimeMirror {
     gsap.killTweensOf(rm.uAccentAmt);
     gsap.to(rm.uAccentAmt, { value: 1, duration: 1.0, ease: 'power2.inOut', delay });
     const haloColor = (this.halo.material as THREE.SpriteMaterial).color;
-    const target = new THREE.Color(this.baseColor).lerp(new THREE.Color(this.accentColor), 0.55);
+    const target = new THREE.Color(this.baseColor).lerp(new THREE.Color(this.accentColor), 0.7);
     gsap.killTweensOf(haloColor);
     gsap.to(haloColor, { r: target.r, g: target.g, b: target.b, duration: 1.2, ease: 'power2.inOut', delay });
+    // let the tinted halo actually READ as ambience, not just a hint
+    gsap.to(this.halo.material as THREE.SpriteMaterial, {
+      opacity: 0.14, duration: 1.2, ease: 'power2.inOut', delay, overwrite: 'auto',
+    });
   }
 
   /** Blow the interior dust away and develop the cover beneath it. */
