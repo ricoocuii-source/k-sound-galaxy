@@ -409,12 +409,14 @@ export class TimeMirror {
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
     gsap.killTweensOf([pm.uForm, pm.uOpacity, rm.uForm, rm.uOpacity]);
-    // grains assemble first, then the image develops from the center outward
-    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 1.7, ease: 'expo.out' });
-    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.6, ease: 'power2.out' });
-    gsap.fromTo(pm.uForm, { value: 0 }, { value: 1, duration: 1.9, ease: 'power2.inOut', delay: 0.45 });
-    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.7, ease: 'power2.out', delay: 0.35 });
-    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 1.4 });
+    // grains assemble first, then the image develops from the center outward —
+    // compressed so the whole reveal finishes during the camera flight and the
+    // lens is complete before the user's viewpoint settles
+    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 1.25, ease: 'expo.out' });
+    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.5, ease: 'power2.out' });
+    gsap.fromTo(pm.uForm, { value: 0 }, { value: 1, duration: 1.05, ease: 'power2.inOut', delay: 0.3 });
+    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.55, ease: 'power2.out', delay: 0.25 });
+    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 1.1 });
   }
 
   close(onDone?: () => void) {

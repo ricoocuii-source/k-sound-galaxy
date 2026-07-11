@@ -568,6 +568,7 @@ export class GalaxyEngine {
   private focusedArtistId: string | null = null;
   private selectedSongId: string | null = null;
   private selectedSongIdB: string | null = null;
+  private mirrorOpenCall: gsap.core.Tween | null = null;
   private searchQuery = '';
   private disposed = false;
 
@@ -1439,8 +1440,9 @@ export class GalaxyEngine {
 
     const nebula = this.nebulas.get(artistId)!;
 
-    // freeze the disk rotation so the mirror & camera stay aligned
-    gsap.to(nebula.spinFactor, { v: 0, duration: 1.1, ease: 'power2.out' });
+    // freeze the disk rotation almost instantly so the star's position is
+    // stable by the time the mirror starts forming mid-flight
+    gsap.to(nebula.spinFactor, { v: 0, duration: 0.2, ease: 'power2.out' });
 
     const starPos = new THREE.Vector3();
     planet.star.getWorldPosition(starPos);
@@ -1475,17 +1477,22 @@ export class GalaxyEngine {
       gsap.to(p.star.material as THREE.SpriteMaterial, { opacity: pid === node.id ? 1 : 0.2, duration: 1.0 });
     });
 
+    // open the mirror DURING the flight so it is already fully formed on
+    // arrival — the user must never watch the centre-out reveal from a
+    // parked camera. When switching songs, wait for the old lens to fade.
+    const wasOpen = this.mirror.isOpen;
+    this.mirrorOpenCall?.kill();
+    this.mirrorOpenCall = gsap.delayedCall(wasOpen ? 0.55 : 0.3, () => {
+      const mirrorPos = new THREE.Vector3();
+      planet.star.getWorldPosition(mirrorPos);
+      mirrorPos.addScaledVector(normal, 5);
+      this.mirror.open(mirrorPos, nebula.palette.arm);
+      this.updateHint();
+    });
+
     this.flyTo(camEnd, starPos, {
       duration: 1.9,
       bloomPeak: 1.0, // no flash-white on arrival; the lens is meant to be dim
-      onComplete: () => {
-        // the star folds into the time lens (scale handled by the frame loop)
-        const mirrorPos = new THREE.Vector3();
-        planet.star.getWorldPosition(mirrorPos);
-        mirrorPos.addScaledVector(normal, 5);
-        this.mirror.open(mirrorPos, nebula.palette.arm);
-        this.updateHint();
-      },
     });
 
     if (notify) this.callbacks.onSelectSong(node, false);
@@ -1540,6 +1547,7 @@ export class GalaxyEngine {
     this.selectedSongIdB = null;
     this.removeCompareLink();
 
+    this.mirrorOpenCall?.kill();
     this.mirror.close();
 
     this.planets.forEach((p) => {
