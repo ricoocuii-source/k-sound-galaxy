@@ -1588,8 +1588,8 @@ export class GalaxyEngine {
     if (this.selectedSongId) this.deselectSong(notify, false);
   }
 
-  setMirrorTexture(tex: THREE.Texture | null, accent?: string | null) {
-    this.mirror.setTexture(tex, accent);
+  setMirrorTexture(tex: THREE.Texture | null) {
+    this.mirror.setTexture(tex);
   }
 
   setSearch(q: string) {

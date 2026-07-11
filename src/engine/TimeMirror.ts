@@ -159,8 +159,6 @@ const RIM_VERT = /* glsl */ `
   uniform float uPixelRatio;
   uniform float uAspect;
   uniform float uVeil;    // 1 interior dust covers the image .. 0 blown away
-  uniform vec3 uAccent;   // dominant cover color (tamed) — links dust to the artwork
-  uniform float uAccentAmt;
   attribute vec2 aHome;   // uv-space rest position (band or interior)
   attribute float aRand;
   attribute float aEdge;  // 0 inner band edge .. 1 outer plume tip
@@ -246,12 +244,12 @@ const RIM_VERT = /* glsl */ `
     vec3 proc = uColor * (0.35 + 0.7 * fbm(aHome * 3.0 + aRand * 7.0));
     vec3 src = mix(proc, tex, uHasMap);
     float lum = dot(src, vec3(0.299, 0.587, 0.114));
-    // 85% desaturate → then pull hard toward the dust tone. The tone itself
-    // leans from cool silver toward the COVER's dominant color once known, so
-    // dust / artwork / nebula share one hue family instead of clashing.
+    // 85% desaturate → then pull hard toward the dust tone: the HOST NEBULA's
+    // arm color. One artist region = one hue family, from overview all the way
+    // into the lens — covers contribute content, never tinting.
     // (additive stacking bleaches hue, so the lean must be strong to survive)
     vec3 col = mix(vec3(lum), src, 0.3);
-    vec3 dustTone = mix(vec3(0.80, 0.83, 0.92), uAccent, 0.75 * uAccentAmt);
+    vec3 dustTone = mix(vec3(0.80, 0.83, 0.92), uColor, 0.6);
     col = mix(col, dustTone, 0.6);
     col = min(col * (0.42 + uHighs * 0.15 + max(rippleSum, 0.0) * 0.2), vec3(0.7)); // faint, capped low
 
@@ -308,8 +306,6 @@ export class TimeMirror {
   private openAt = 0;
   private unveilStarted = false;
   private hasTexture = false;
-  private baseColor = '#8d85c6'; // nebula arm color passed to open()
-  private accentColor: string | null = null; // dominant cover color
   public isOpen = false;
 
   constructor(haloTexture: THREE.Texture) {
@@ -392,8 +388,6 @@ export class TimeMirror {
         uTime: { value: 0 },
         uForm: { value: 0 },
         uVeil: { value: 1 },
-        uAccent: { value: new THREE.Color('#c8ccda') },
-        uAccentAmt: { value: 0 },
         uOpacity: { value: 0 },
         uBass: { value: 0 },
         uHighs: { value: 0 },
@@ -444,29 +438,24 @@ export class TimeMirror {
     this.group.scale.setScalar(1);
     this.isOpen = true;
 
-    this.baseColor = color;
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil, rm.uAccentAmt]);
+    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil]);
     // the lens is BORN AS PURE GRAIN DUST — the whole particle body (band +
     // interior veil) assembles during the flight. The cover develops only
     // once its texture is ready: the veil blows away and the image fades up
     // beneath it (scheduleUnveil).
     pm.uReveal.value = 0;
     rm.uVeil.value = 1;
-    rm.uAccentAmt.value = 0;
     this.unveilStarted = false;
     this.openAt = this.lastTime;
     gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 0.8, ease: 'expo.out' });
     gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.4, ease: 'power2.out' });
     gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.45, ease: 'power2.out', delay: 0.15 });
-    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.06, duration: 0.8 });
+    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.1, duration: 0.8 });
     // texture already loaded (cached cover): unveil as soon as the dust body
     // has taken shape — the WHOLE sequence must finish within the flight
-    if (this.hasTexture) {
-      this.scheduleUnveil(0.45);
-      this.applyAccent(0.45);
-    }
+    if (this.hasTexture) this.scheduleUnveil(0.45);
   }
 
   close(onDone?: () => void) {
@@ -501,10 +490,9 @@ export class TimeMirror {
     });
   }
 
-  setTexture(tex: THREE.Texture | null, accent?: string | null) {
+  setTexture(tex: THREE.Texture | null) {
     this.texEpoch++;
     this.hasTexture = !!tex;
-    this.accentColor = tex ? accent || null : null;
     const target = tex || this.fallbackTex;
     this.mirrorMat.uniforms.uMap.value = target;
     this.rimMat.uniforms.uMap.value = target;
@@ -515,39 +503,16 @@ export class TimeMirror {
       // the cover is ready — let the dust body finish forming, then blow the
       // veil away and develop the image beneath it
       if (this.isOpen && !this.unveilStarted) {
-        const d = Math.max(0.1, 0.45 - (this.lastTime - this.openAt));
-        this.scheduleUnveil(d);
-        this.applyAccent(d);
-      } else if (this.isOpen) {
-        this.applyAccent(0.1);
+        this.scheduleUnveil(Math.max(0.1, 0.45 - (this.lastTime - this.openAt)));
       }
     } else {
       this.mirrorMat.uniforms.uHasMap.value = 0;
       this.rimMat.uniforms.uHasMap.value = 0;
-      gsap.killTweensOf([this.mirrorMat.uniforms.uReveal, this.rimMat.uniforms.uVeil, this.rimMat.uniforms.uAccentAmt]);
+      gsap.killTweensOf([this.mirrorMat.uniforms.uReveal, this.rimMat.uniforms.uVeil]);
       this.mirrorMat.uniforms.uReveal.value = 0;
       this.rimMat.uniforms.uVeil.value = 1;
-      this.rimMat.uniforms.uAccentAmt.value = 0;
       this.unveilStarted = false;
     }
-  }
-
-  /** Lean the dust + halo toward the cover's dominant color — the bridge that
-   *  ties artwork, grains and the host nebula into one hue family. */
-  private applyAccent(delay: number) {
-    if (!this.accentColor) return;
-    const rm = this.rimMat.uniforms;
-    (rm.uAccent.value as THREE.Color).set(this.accentColor);
-    gsap.killTweensOf(rm.uAccentAmt);
-    gsap.to(rm.uAccentAmt, { value: 1, duration: 1.0, ease: 'power2.inOut', delay });
-    const haloColor = (this.halo.material as THREE.SpriteMaterial).color;
-    const target = new THREE.Color(this.baseColor).lerp(new THREE.Color(this.accentColor), 0.7);
-    gsap.killTweensOf(haloColor);
-    gsap.to(haloColor, { r: target.r, g: target.g, b: target.b, duration: 1.2, ease: 'power2.inOut', delay });
-    // let the tinted halo actually READ as ambience, not just a hint
-    gsap.to(this.halo.material as THREE.SpriteMaterial, {
-      opacity: 0.14, duration: 1.2, ease: 'power2.inOut', delay, overwrite: 'auto',
-    });
   }
 
   /** Blow the interior dust away and develop the cover beneath it. */
