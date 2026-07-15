@@ -1,0 +1,11 @@
+Model Information:
+* title:	Star Fighter Low-Poly
+* source:	https://sketchfab.com/3d-models/star-fighter-low-poly-3cfa041b19c745be9d1358a094292b31
+* author:	3DHaupt (https://sketchfab.com/dennish2010)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Star Fighter Low-Poly" (https://sketchfab.com/3d-models/star-fighter-low-poly-3cfa041b19c745be9d1358a094292b31) by 3DHaupt (https://sketchfab.com/dennish2010) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)

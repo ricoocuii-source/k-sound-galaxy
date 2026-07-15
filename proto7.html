@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>K Sound Galaxy — Prototype v7 · PLANETFALL 着陆计划</title>
+    <link rel="stylesheet" href="/vendor/augmented-ui.min.css" />
+    <style>
+      :root {
+        --ink: rgba(236, 242, 250, 0.92);
+        --dim: rgba(236, 242, 250, 0.45);
+        --acc: #ffb46b; /* 由 JS 按歌手应援色改写 */
+        --serif: "Songti SC", "STSong", Georgia, "Noto Serif SC", serif;
+        --mono: "SF Mono", ui-monospace, Menlo, monospace;
+      }
+      html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+      #stage { position: fixed; inset: 0; }
+
+      .grain {
+        position: fixed; inset: -60px; pointer-events: none; z-index: 30; opacity: 0.055;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+        background-size: 240px 240px; mix-blend-mode: soft-light;
+        animation: g 0.9s steps(3) infinite;
+      }
+      @keyframes g { 0%{background-position:0 0} 33%{background-position:80px -60px} 66%{background-position:-70px 40px} 100%{background-position:0 0} }
+      .vignette {
+        position: fixed; inset: 0; pointer-events: none; z-index: 20;
+        background: radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.3) 66%, rgba(0,0,0,0.9) 100%);
+      }
+
+      .ui { position: fixed; z-index: 40; color: var(--ink); font-family: var(--mono); }
+
+      /* ---------- 左上：舰名 + 模式 ---------- */
+      .title { top: 26px; left: 30px; }
+      .title b { display: block; font-family: var(--serif); font-weight: 500; font-size: 15px; letter-spacing: 0.4em; }
+      .title small { display: block; margin-top: 6px; font-size: 9px; letter-spacing: 0.28em; color: var(--dim); }
+      .mode {
+        margin-top: 12px; display: inline-block; padding: 5px 12px;
+        font-size: 9.5px; letter-spacing: 0.32em; color: var(--acc);
+        --aug-border-all: 1px; --aug-border-bg: color-mix(in srgb, var(--acc) 65%, transparent);
+        --aug-inlay-all: 0px; --aug-tl: 8px; --aug-br: 8px;
+      }
+
+      /* ---------- 右上：雷达 ---------- */
+      .radarBox {
+        top: 26px; right: 30px; padding: 10px;
+        --aug-border-all: 1px; --aug-border-bg: rgba(236,242,250,0.22);
+        --aug-tl: 10px; --aug-br: 10px; --aug-t: 6px; --aug-t-extend1: 42px;
+        background: rgba(5, 8, 12, 0.42); backdrop-filter: blur(8px);
+      }
+      .radarBox canvas { display: block; width: 148px; height: 148px; }
+      .radarBox .lg { margin-top: 7px; font-size: 8.5px; letter-spacing: 0.24em; color: var(--dim); text-align: center; }
+      .radarBox .lg u { text-decoration: none; color: var(--acc); }
+
+      /* ---------- 左下：舰载 AI 事件流 ---------- */
+      .log { left: 30px; bottom: 30px; max-width: 420px; }
+      .log .lines { display: flex; flex-direction: column; gap: 5px; }
+      .log .lines i { font-style: normal; font-size: 10.5px; letter-spacing: 0.08em; color: var(--dim); transition: color 0.5s; }
+      .log .lines i:last-child { color: rgba(236,242,250,0.88); }
+      .log .lines i b { color: var(--acc); font-weight: 400; }
+      .log .onair { margin-top: 10px; font-size: 9px; letter-spacing: 0.3em; color: var(--acc); }
+      .log .onair::before { content: "●"; margin-right: 7px; animation: blink 2s ease-in-out infinite; }
+      @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+
+      /* ---------- 右下：NOW PLAYING ---------- */
+      .np {
+        right: 30px; bottom: 30px; width: 336px;
+        opacity: 0; transform: translateY(14px); pointer-events: none;
+        transition: opacity 0.7s ease, transform 0.7s ease;
+      }
+      .np.show { opacity: 1; transform: translateY(0); pointer-events: auto; cursor: pointer; }
+      .np .card {
+        display: flex; gap: 15px; align-items: center; padding: 14px 16px;
+        background: rgba(5, 8, 12, 0.5); backdrop-filter: blur(12px);
+        --aug-border-all: 1px; --aug-border-bg: color-mix(in srgb, var(--acc) 55%, rgba(236,242,250,0.18));
+        --aug-tl: 12px; --aug-br: 12px; --aug-b: 5px; --aug-b-extend1: 60px;
+      }
+      /* 圆形旋转封面 = 唱片 */
+      .np .disc {
+        width: 58px; height: 58px; border-radius: 50%; flex: none; position: relative;
+        background: radial-gradient(circle, #16161d 26%, #0a0a0f 62%, #16161d 63%, #0a0a0f 100%);
+        box-shadow: 0 0 24px color-mix(in srgb, var(--acc) 45%, transparent);
+        animation: spin 3.2s linear infinite;
+      }
+      .np.paused .disc { animation-play-state: paused; filter: grayscale(0.5) brightness(0.7); }
+      .np .disc img {
+        position: absolute; inset: 12px; width: 34px; height: 34px; border-radius: 50%;
+        object-fit: cover; background: #14141e;
+      }
+      .np .disc::after { content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px; border-radius: 50%; background: #04050a; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .np .meta { flex: 1; min-width: 0; }
+      .np .meta b { display: block; font-family: var(--serif); font-size: 15.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .np .meta span { display: block; margin-top: 4px; font-size: 9px; letter-spacing: 0.1em; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .np .bar { margin-top: 8px; height: 2px; background: rgba(236,242,250,0.14); overflow: hidden; }
+      .np .bar i { display: block; height: 100%; width: 0%; background: var(--acc); box-shadow: 0 0 8px var(--acc); }
+      .np .meta span.state { display: none; margin-top: 5px; font-size: 8.5px; letter-spacing: 0.22em; color: var(--dim); }
+      .np.paused .meta span.state { display: block; }
+
+      /* ---------- 锁定框（跟踪行星） ---------- */
+      .reticle {
+        left: 0; top: 0; padding: 10px 16px 10px 14px; pointer-events: none;
+        opacity: 0; transition: opacity 0.25s;
+        --aug-border-all: 1px; --aug-border-bg: var(--acc);
+        --aug-tl: 10px; --aug-tr: 10px; --aug-bl: 10px; --aug-br: 10px;
+        background: color-mix(in srgb, var(--acc) 7%, rgba(4,6,10,0.35));
+        will-change: transform;
+      }
+      .reticle.show { opacity: 1; }
+      .reticle b { display: block; font-family: var(--serif); font-size: 15px; font-weight: 500; letter-spacing: 0.12em; color: var(--ink); }
+      .reticle span { display: block; margin-top: 3px; font-size: 8.5px; letter-spacing: 0.26em; color: var(--acc); }
+
+      /* ---------- 悬停唱片标签 ---------- */
+      .vinylTag {
+        left: 0; top: 0; padding: 7px 12px; pointer-events: none;
+        opacity: 0; transition: opacity 0.2s;
+        --aug-border-all: 1px; --aug-border-bg: var(--acc);
+        --aug-tl: 7px; --aug-br: 7px;
+        background: rgba(4,6,10,0.6); backdrop-filter: blur(6px);
+        font-size: 10.5px; letter-spacing: 0.1em; will-change: transform;
+      }
+      .vinylTag.show { opacity: 1; }
+      .vinylTag em { font-style: normal; color: var(--acc); font-size: 8.5px; letter-spacing: 0.26em; display: block; margin-top: 2px; }
+
+      /* ---------- 轨道态：行星卡 ---------- */
+      .pcard {
+        left: 30px; top: 50%; transform: translateY(-50%) translateX(-16px); width: 246px;
+        padding: 18px 18px 15px; opacity: 0; pointer-events: none;
+        transition: opacity 0.6s ease, transform 0.6s ease;
+        background: rgba(5, 8, 12, 0.5); backdrop-filter: blur(12px);
+        --aug-border-all: 1px; --aug-border-bg: color-mix(in srgb, var(--acc) 60%, rgba(236,242,250,0.15));
+        --aug-tl: 14px; --aug-br: 14px; --aug-r: 5px; --aug-r-extend1: 54px;
+      }
+      .pcard.show { opacity: 1; transform: translateY(-50%) translateX(0); }
+      .pcard .k { font-size: 8.5px; letter-spacing: 0.3em; color: var(--acc); }
+      .pcard b.nm { display: block; margin-top: 8px; font-family: var(--serif); font-size: 22px; font-weight: 500; letter-spacing: 0.06em; }
+      .pcard .cn { margin-top: 3px; font-size: 10px; color: var(--dim); letter-spacing: 0.2em; }
+      .pcard .row { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+      .pcard .chip { width: 26px; height: 10px; background: var(--acc); box-shadow: 0 0 10px var(--acc); }
+      .pcard .row span { font-size: 9px; letter-spacing: 0.18em; color: var(--dim); }
+      .pcard .stats { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 9.5px; letter-spacing: 0.14em; color: var(--dim); }
+      .pcard .stats u { text-decoration: none; color: var(--ink); }
+      .pcard .go { margin-top: 14px; font-size: 9px; letter-spacing: 0.24em; color: var(--acc); }
+
+      /* ---------- 大气进入过场 ---------- */
+      .entry {
+        position: fixed; inset: 0; z-index: 26; pointer-events: none; opacity: 0;
+        background:
+          radial-gradient(ellipse at 50% 120%, color-mix(in srgb, var(--acc) 55%, transparent), transparent 55%),
+          radial-gradient(ellipse at 50% -20%, color-mix(in srgb, var(--acc) 30%, transparent), transparent 45%);
+      }
+      .entry .streaks {
+        position: absolute; inset: 0; opacity: 0.75;
+        background: repeating-linear-gradient(178deg, transparent 0 46px, color-mix(in srgb, var(--acc) 26%, transparent) 46px 48px);
+        animation: streak 0.24s linear infinite;
+      }
+      @keyframes streak { to { background-position: 0 94px; } }
+
+      /* ---------- 超空间跳跃白闪(入闸/出闸,盖过 entry 但在 grain/HUD 之下) ---------- */
+      .jumpflash {
+        position: fixed; inset: 0; z-index: 27; pointer-events: none; opacity: 0;
+        background: radial-gradient(circle at 50% 50%, #fff 0%, #eaf2ff 55%, #cfe0ff 100%);
+      }
+
+      .hint {
+        bottom: 12px; left: 50%; transform: translateX(-50%);
+        font-size: 9.5px; letter-spacing: 0.3em; color: rgba(236,242,250,0.38);
+        white-space: nowrap; transition: opacity 0.6s;
+      }
+
+      .toast {
+        top: 88px; left: 50%; transform: translateX(-50%) translateY(-8px); padding: 8px 18px;
+        font-size: 10px; letter-spacing: 0.3em; color: var(--acc); opacity: 0;
+        --aug-border-all: 1px; --aug-border-bg: var(--acc); --aug-tl: 8px; --aug-br: 8px;
+        background: rgba(4,6,10,0.66); transition: opacity 0.4s, transform 0.4s;
+      }
+      .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+      .att { bottom: 12px; right: 30px; font-size: 8px; letter-spacing: 0.06em; color: rgba(236,242,250,0.22); text-align: right; line-height: 1.7; }
+      .att a { color: inherit; }
+
+      /* ---------- 点火幕 ---------- */
+      .ignite {
+        position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 24px;
+        background: radial-gradient(ellipse at center, rgba(4,6,12,0.55), rgba(0,0,0,0.96) 78%);
+        cursor: pointer; transition: opacity 1.2s ease;
+        font-family: var(--serif); color: var(--ink); text-align: center;
+      }
+      .ignite.off { opacity: 0; pointer-events: none; }
+      .ignite .fm { font-family: var(--mono); font-size: 11px; letter-spacing: 0.5em; color: var(--acc); }
+      .ignite h1 { font-size: 30px; font-weight: 500; letter-spacing: 0.3em; margin: 0; }
+      .ignite p { font-family: var(--mono); font-size: 10px; letter-spacing: 0.42em; color: var(--dim); margin: 0; animation: breathe 3.2s ease-in-out infinite; }
+      @keyframes breathe { 0%,100%{opacity:0.4} 50%{opacity:1} }
+
+      @media (max-width: 860px) {
+        .pcard { width: 210px; }
+        .np { width: min(336px, calc(100vw - 60px)); }
+        .log { bottom: 132px; max-width: calc(100vw - 60px); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <div class="vignette"></div>
+    <div class="grain"></div>
+    <div class="entry" id="entry"><div class="streaks"></div></div>
+    <div class="jumpflash" id="jumpflash"></div>
+
+    <div class="ui title">
+      <b>K SOUND GALAXY</b>
+      <small>PROTOTYPE V7 · PLANETFALL 着陆计划 — 每位歌手是一颗行星</small>
+      <span class="mode" id="mode" data-augmented-ui="tl-clip br-clip border">巡航 CRUISE</span>
+    </div>
+
+    <div class="ui radarBox" data-augmented-ui="tl-clip br-clip t-clip-x border">
+      <canvas id="radar" width="296" height="296"></canvas>
+      <div class="lg">长程雷达 · <u id="radarN">25</u> 信号 · 图鉴 <u id="logN">0</u></div>
+    </div>
+
+    <div class="ui log">
+      <div class="lines" id="logLines"></div>
+      <div class="onair">SHIP AI · 舰载向导 · 午夜频段</div>
+    </div>
+
+    <div class="ui np" id="np">
+      <div class="card" data-augmented-ui="tl-clip br-clip b-clip-x border">
+        <div class="disc"><img id="npCover" alt="" /></div>
+        <div class="meta">
+          <b id="npTitle">—</b>
+          <span id="npMeta">—</span>
+          <div class="bar"><i id="npBar"></i></div>
+          <span class="state">⏸ 已暂停 · 点卡片或按 P 继续</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="ui reticle" id="reticle" data-augmented-ui="tl-clip tr-clip bl-clip br-clip border">
+      <b id="retName">—</b>
+      <span id="retSub">点击 · 入轨</span>
+    </div>
+
+    <div class="ui vinylTag" id="vinylTag" data-augmented-ui="tl-clip br-clip border">
+      <span id="vtName">—</span>
+      <em>点击 · 降落播放</em>
+    </div>
+
+    <div class="ui pcard" id="pcard" data-augmented-ui="tl-clip br-clip r-clip-y border">
+      <span class="k">ORBIT · 已入轨</span>
+      <b class="nm" id="pcName">—</b>
+      <div class="cn" id="pcCn">—</div>
+      <div class="row"><i class="chip"></i><span>应援色 · 行星大气</span></div>
+      <div class="stats">
+        <span>轨道唱片 <u id="pcSongs">0</u> 张</span>
+        <span>本星图鉴 <u id="pcLog">0</u> 收集</span>
+      </div>
+      <div class="go">点击环绕的唱片 → 降落序列</div>
+    </div>
+
+    <div class="ui toast" id="toast" data-augmented-ui="tl-clip br-clip border">图鉴 +1</div>
+
+    <div class="ui hint" id="hint">拖拽 环视 · WASD 手动驾驶 · V 机体视角 · 点行星 入轨 · 点唱片 降落 · M 静音</div>
+
+    <div class="ui att">
+      星船 Star Fighter © 3DHaupt (CC BY-NC · 非商用) · 行星纹理 © Solar System Scope (CC BY 4.0)<br/>
+      大气散射 wwwtyro/glsl-atmosphere (公有领域) · HUD augmented-ui (MIT) · 天幕 ESO/S.Brunier (CC BY 4.0)<br/>
+      光斑/引擎 three.js (MIT) · warp Star Nest © Kali (MIT) · 音源 iTunes 30s 试听
+    </div>
+
+    <div class="ignite" id="ignite">
+      <div class="fm">PLANETFALL PROGRAM · 25 PLANETS</div>
+      <h1>着 陆 计 划</h1>
+      <p>点 击 点 火 · 戴 上 耳 机</p>
+    </div>
+
+    <script type="module" src="/src/proto7/main.ts"></script>
+  </body>
+</html>
