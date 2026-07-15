@@ -206,7 +206,11 @@ const milkyWayTemplate = new Promise<THREE.Group>((resolve, reject) => {
   }, undefined, reject);
 });
 
-function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
+function mountMilkyWayVisual(
+  visual: THREE.Group,
+  artist: ArtistWorld,
+  particleMaterials: THREE.PointsMaterial[],
+) {
   milkyWayTemplate.then((template) => {
     const instance = template.clone(true);
     instance.traverse((obj) => {
@@ -214,14 +218,15 @@ function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
       if (!points.isPoints) return;
       const material = points.material.clone();
       material.vertexColors = true;
-      material.color.copy(artist.color).lerp(new THREE.Color(0xffffff), 0.25);
-      material.size = 1;
+      material.color.copy(artist.color).lerp(new THREE.Color(0xffffff), 0.28);
+      material.size = 0.95;
       material.sizeAttenuation = false;
       material.transparent = true;
-      material.opacity = 0.035;
+      material.opacity = 0.032;
       material.depthWrite = false;
       material.blending = THREE.NormalBlending;
       points.material = material;
+      particleMaterials.push(material);
     });
     visual.add(instance);
   }).catch((error) => console.error('milky-way particle model failed:', error));
@@ -232,6 +237,7 @@ interface Planet {
   root: THREE.Group;
   visual: THREE.Group;
   galaxy: THREE.Group;
+  particleMaterials: THREE.PointsMaterial[];
   pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   r: number;
   spin: number;
@@ -258,20 +264,21 @@ for (const a of ARTISTS) {
   );
   root.add(visual);
   const galaxy = new THREE.Group();
-  galaxy.scale.setScalar(r * 0.95);
+  galaxy.scale.setScalar(r * 1.05);
   galaxy.rotateY(i * 1.618);
   visual.add(galaxy);
-  mountMilkyWayVisual(galaxy, a);
+  const particleMaterials: THREE.PointsMaterial[] = [];
+  mountMilkyWayVisual(galaxy, a, particleMaterials);
 
   // 粒子盘只负责显示；透明球仅用于鼠标命中，飞行/轨道继续沿用原 r。
   const pickMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
   pickMaterial.colorWrite = false;
-  const pickMesh = new THREE.Mesh(new THREE.SphereGeometry(r * 1.38, 28, 18), pickMaterial);
+  const pickMesh = new THREE.Mesh(new THREE.SphereGeometry(r * 1.55, 28, 18), pickMaterial);
   pickMesh.userData.planetIdx = planets.length;
   root.add(pickMesh);
 
   scene.add(root);
-  planets.push({ a, root, visual, galaxy, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
+  planets.push({ a, root, visual, galaxy, particleMaterials, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
   pickPlanets.push(pickMesh);
 }
 
@@ -280,6 +287,7 @@ interface Vinyl {
   node: MusicNode;
   group: THREE.Group;
   disc: THREE.Mesh;
+  hit: THREE.Mesh;
   labelMat: THREE.MeshBasicMaterial;
   glow: THREE.Sprite;
   orbR: number; orbSpeed: number; phase: number; incl: THREE.Euler;
@@ -323,19 +331,23 @@ function placeholderLabel(node: MusicNode, css: string): THREE.CanvasTexture {
   const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
-const VINYL_R = 8.2;
+const VINYL_R = 4;
 function makeVinyl(node: MusicNode, css: string, colorHex: THREE.Color): Vinyl {
   const group = new THREE.Group();
   const disc = new THREE.Mesh(
     new THREE.CylinderGeometry(VINYL_R, VINYL_R, 0.55, 48),
     [
       new THREE.MeshStandardMaterial({ color: 0x0c0c12, roughness: 0.42, metalness: 0.5 }),
-      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0xbfc6de, roughness: 0.38, metalness: 0.55 }),
-      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0xbfc6de, roughness: 0.38, metalness: 0.55 }),
+      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0x454a58, roughness: 0.42, metalness: 0.5 }),
+      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0x454a58, roughness: 0.42, metalness: 0.5 }),
     ]
   );
   group.add(disc);
-  const labelMat = new THREE.MeshBasicMaterial({ map: placeholderLabel(node, css), side: THREE.DoubleSide });
+  const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  hitMaterial.colorWrite = false;
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(VINYL_R * 2.4, 16, 10), hitMaterial);
+  group.add(hit);
+  const labelMat = new THREE.MeshBasicMaterial({ map: placeholderLabel(node, css), color: 0x7a7f8e, side: THREE.DoubleSide });
   const label = new THREE.Mesh(new THREE.CircleGeometry(VINYL_R * 0.42, 40), labelMat);
   label.rotation.x = -Math.PI / 2; label.position.y = 0.31;
   group.add(label);
@@ -346,10 +358,11 @@ function makeVinyl(node: MusicNode, css: string, colorHex: THREE.Color): Vinyl {
     map: glowTexShared, color: colorHex, transparent: true, opacity: 0.5,
     blending: THREE.AdditiveBlending, depthWrite: false,
   }));
-  glow.scale.setScalar(30);
+  glow.scale.setScalar(6);
   group.add(glow);
   (disc as any).__vinyl = null; // 稍后回填
-  return { node, group, disc, labelMat, glow, orbR: 0, orbSpeed: 0, phase: 0, incl: new THREE.Euler(), base: 1, coverState: 0, info: null };
+  (hit as any).__vinyl = null;
+  return { node, group, disc, hit, labelMat, glow, orbR: 0, orbSpeed: 0, phase: 0, incl: new THREE.Euler(), base: 1, coverState: 0, info: null };
 }
 
 /* 封面/试听预取 */
@@ -666,6 +679,8 @@ const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE
 const galaxyFaceDir = new THREE.Vector3();
 const galaxyFaceQuat = new THREE.Quaternion();
 const galaxyNormal = new THREE.Vector3(0, 1, 0);
+const galaxyWhite = new THREE.Color(0xffffff);
+const galaxyTint = new THREE.Color();
 
 function cruisePos(th: number, out: THREE.Vector3) {
   return out.set(Math.cos(th) * CRUISE_R, CRUISE_Y + Math.sin(th * 2.3) * 90, Math.sin(th) * CRUISE_R);
@@ -756,13 +771,14 @@ function buildVinyls(p: Planet) {
   const songs = p.a.songs.slice(0, 12);
   songs.forEach((node, i) => {
     const v = makeVinyl(node, p.a.css, p.a.color);
-    v.orbR = p.r * (1.78 + (i % 3) * 0.34);
+    v.orbR = p.r * (2.15 + (i % 3) * 0.42);
     v.orbSpeed = 0.16 - (i % 4) * 0.018;
     v.phase = (i / songs.length) * Math.PI * 2;
     v.incl = new THREE.Euler(((i % 5) - 2) * 0.16, 0, ((i % 4) - 1.5) * 0.12);
-    v.base = p.r / 56;
+    v.base = p.r / 92;
     v.group.scale.setScalar(v.base);
     (v.disc as any).__vinyl = v;
+    (v.hit as any).__vinyl = v;
     root.add(v.group);
     p.vinyls.push(v);
   });
@@ -1233,8 +1249,8 @@ function landOnVinyl(v: Vinyl) {
 
   audio.entryNoise(2.1);
   // 星云穿越过场
-  gsap.to(el.entry.style, { opacity: 0.55, duration: 1.15, ease: 'power2.in', delay: 0.5 });
-  gsap.to(el.entry.style, { opacity: 0, duration: 0.8, ease: 'power2.out', delay: 2.05 });
+  gsap.to(el.entry, { opacity: 0.55, duration: 1.15, ease: 'power2.in', delay: 0.5 });
+  gsap.to(el.entry, { opacity: 0, duration: 0.8, ease: 'power2.out', delay: 2.05 });
   gsap.to(camera, { fov: 74, duration: 1.4, ease: 'power2.in', onUpdate: () => camera.updateProjectionMatrix() });
   gsap.to(camera, { fov: 58, duration: 1.0, ease: 'power2.out', delay: 1.7, onUpdate: () => camera.updateProjectionMatrix() });
   shake = 0.001;
@@ -1333,8 +1349,8 @@ function nextLanding() {
   const tangent = tmpV3.crossVectors(n, new THREE.Vector3(0, 1, 0)).normalize();
   if (tangent.lengthSq() < 0.01) tangent.set(1, 0, 0);
   const look = surf.clone().addScaledVector(tangent, p.r * 1.3).addScaledVector(n, -p.r * 0.42);
-  gsap.to(el.entry.style, { opacity: 0.5, duration: 0.7, ease: 'power2.in', delay: 0.2 });
-  gsap.to(el.entry.style, { opacity: 0, duration: 0.6, ease: 'power2.out', delay: 1.15 });
+  gsap.to(el.entry, { opacity: 0.5, duration: 0.7, ease: 'power2.in', delay: 0.2 });
+  gsap.to(el.entry, { opacity: 0, duration: 0.6, ease: 'power2.out', delay: 1.15 });
   flyBezier({
     to: surf, look, dur: 1.9, ease: 'power2.inOut', roll: 0.3,
     onDone: () => { setMode('surface'); initDrive(); dockThe(nv); playVinyl(nv); },
@@ -1362,8 +1378,8 @@ function pick() {
     hoverVinyl = null;
     hoverPlanet = null;
     if (MODE === 'orbit') {
-      const discs = focus.vinyls.map((v) => v.disc);
-      const hits = raycaster.intersectObjects(discs, false);
+      const songTargets = focus.vinyls.flatMap((v) => [v.disc, v.hit]);
+      const hits = raycaster.intersectObjects(songTargets, false);
       hoverVinyl = hits.length ? ((hits[0].object as any).__vinyl as Vinyl) : null;
     }
     if (!hoverVinyl) {
@@ -1590,10 +1606,20 @@ function tick() {
     galaxyFaceQuat.setFromUnitVectors(galaxyNormal, galaxyFaceDir);
     p.visual.quaternion.slerp(galaxyFaceQuat, 1 - Math.exp(-dt * 8));
     p.galaxy.rotateY(dt * p.spin);
-    const pulse = bass * (p === focus ? 0.035 : 0.012);
-    const targetScale = p.r * 0.95 * (1 + pulse);
+    const isFocused = p === focus;
+    const pulse = bass * (isFocused ? 0.028 : 0.01);
+    const scaleFactor = isFocused ? 3.25 : focus ? 0.72 : 1.05;
+    const targetScale = p.r * scaleFactor * (1 + pulse);
     const scale = THREE.MathUtils.lerp(p.galaxy.scale.x, targetScale, 1 - Math.exp(-dt * 5));
     p.galaxy.scale.setScalar(scale);
+    const targetOpacity = isFocused ? 0.26 : focus ? 0.003 : 0.032;
+    const targetPointSize = isFocused ? 0.9 : focus ? 0.72 : 0.95;
+    galaxyTint.copy(p.a.color).lerp(galaxyWhite, isFocused ? 0.84 : 0.28);
+    for (const material of p.particleMaterials) {
+      material.opacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 1 - Math.exp(-dt * 6));
+      material.size = THREE.MathUtils.lerp(material.size, targetPointSize, 1 - Math.exp(-dt * 6));
+      material.color.lerp(galaxyTint, 1 - Math.exp(-dt * 5));
+    }
   }
 
   // ---- 唱片轨道 ----
@@ -1605,9 +1631,9 @@ function tick() {
       v.group.rotation.y += dt * 1.6;
       v.group.rotation.z = Math.sin(t * 0.7 + v.phase) * 0.12;
       const isHover = v === hoverVinyl;
-      const s = v.base * (isHover ? 1.32 : 1);
+      const s = v.base * (isHover ? 1.38 : 1);
       v.group.scale.lerp(tmpV2.setScalar(s), 1 - Math.exp(-dt * 9));
-      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 0.85 : 0.42;
+      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 0.38 : 0.08;
     }
   }
   if (dockVinyl) {
@@ -1748,7 +1774,7 @@ function tick() {
 
   // ---- 后期强度 ----
   bloom.strength = 0.7 + bass * 0.45 + warpU.uWarp.value * 0.7;
-  rgbPass.uniforms['amount'].value = 0.0009 + warpU.uWarp.value * 0.004 + bass * 0.0006;
+  rgbPass.uniforms['amount'].value = (focus ? 0 : 0.0009) + warpU.uWarp.value * 0.004 + bass * 0.0006;
   warpU.uTime.value = t;
 
   composer.render();
