@@ -216,7 +216,8 @@ function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
       material.vertexColors = true;
       material.color.copy(artist.color).lerp(new THREE.Color(0xffffff), 0.28);
       material.size = 0.95;
-      material.sizeAttenuation = false;
+      // 粒子随透视距离同步缩放，避免远处过度堆叠、近处被摊薄。
+      material.sizeAttenuation = true;
       material.transparent = true;
       material.opacity = 0.032;
       material.depthWrite = false;
