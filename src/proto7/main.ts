@@ -226,31 +226,21 @@ for (const a of ARTISTS) {
   pickPlanets.push(pickMesh);
 }
 
-/* ============ 黑胶唱片（歌曲卫星）—— 圆的、有厚度、会转 ============ */
+/* ============ 歌曲亮星：Bezier Stable 衍射星芒 + 常驻标题 ============ */
 interface Vinyl {
   node: MusicNode;
   group: THREE.Group;
-  disc: THREE.Mesh;
+  disc: THREE.Sprite;
   hit: THREE.Mesh;
   labelMat: THREE.MeshBasicMaterial;
   glow: THREE.Sprite;
-  orbR: number; orbSpeed: number; phase: number; incl: THREE.Euler;
+  label: HTMLDivElement;
+  index: number;
+  total: number;
   base: number;
   coverState: 0 | 1 | 2;
   info: TrackInfo | null;
 }
-
-const grooveTex = (() => {
-  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
-  const c = cv.getContext('2d')!;
-  c.fillStyle = '#0a0a10'; c.fillRect(0, 0, 256, 256);
-  for (let rr = 34; rr < 126; rr += 3) {
-    c.beginPath(); c.arc(128, 128, rr, 0, Math.PI * 2);
-    c.strokeStyle = rr % 6 < 3 ? 'rgba(180,190,220,0.10)' : 'rgba(30,32,44,0.9)';
-    c.lineWidth = 1.4; c.stroke();
-  }
-  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
-})();
 
 const glowTexShared = (() => {
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
@@ -261,52 +251,34 @@ const glowTexShared = (() => {
   return new THREE.CanvasTexture(cv);
 })();
 
-function placeholderLabel(node: MusicNode, css: string): THREE.CanvasTexture {
-  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
-  const c = cv.getContext('2d')!;
-  const g = c.createRadialGradient(128, 128, 10, 128, 128, 150);
-  g.addColorStop(0, css); g.addColorStop(1, '#14141e');
-  c.fillStyle = g; c.fillRect(0, 0, 256, 256);
-  c.fillStyle = 'rgba(255,255,255,0.92)';
-  c.font = '600 92px Georgia, serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
-  c.fillText(node.name.slice(0, 1).toUpperCase(), 128, 122);
-  c.font = '400 20px Menlo, monospace'; c.fillStyle = 'rgba(255,255,255,0.6)';
-  c.fillText(node.name.slice(0, 16), 128, 196);
-  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace; return t;
-}
-
-const VINYL_R = 4;
-function makeVinyl(node: MusicNode, css: string, colorHex: THREE.Color): Vinyl {
+function makeVinyl(node: MusicNode, _css: string, colorHex: THREE.Color): Vinyl {
   const group = new THREE.Group();
-  const disc = new THREE.Mesh(
-    new THREE.CylinderGeometry(VINYL_R, VINYL_R, 0.55, 48),
-    [
-      new THREE.MeshStandardMaterial({ color: 0x0c0c12, roughness: 0.42, metalness: 0.5 }),
-      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0x454a58, roughness: 0.42, metalness: 0.5 }),
-      new THREE.MeshStandardMaterial({ map: grooveTex, color: 0x454a58, roughness: 0.42, metalness: 0.5 }),
-    ]
-  );
+  const starColor = colorHex.clone().lerp(new THREE.Color(0xffffff), 0.86);
+  const disc = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: stableNebulaAssets.spike,
+    color: starColor,
+    transparent: true,
+    opacity: 0.92,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  }));
+  const base = (node.radius || 4.5) >= 8 ? 34 : 26;
+  disc.scale.setScalar(base);
+  disc.renderOrder = 10;
   group.add(disc);
   const hitMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
   hitMaterial.colorWrite = false;
-  const hit = new THREE.Mesh(new THREE.SphereGeometry(VINYL_R * 2.4, 16, 10), hitMaterial);
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(14, 10, 8), hitMaterial);
   group.add(hit);
-  const labelMat = new THREE.MeshBasicMaterial({ map: placeholderLabel(node, css), color: 0x7a7f8e, side: THREE.DoubleSide });
-  const label = new THREE.Mesh(new THREE.CircleGeometry(VINYL_R * 0.42, 40), labelMat);
-  label.rotation.x = -Math.PI / 2; label.position.y = 0.31;
-  group.add(label);
-  const label2 = new THREE.Mesh(new THREE.CircleGeometry(VINYL_R * 0.42, 40), labelMat);
-  label2.rotation.x = Math.PI / 2; label2.position.y = -0.31;
-  group.add(label2);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: glowTexShared, color: colorHex, transparent: true, opacity: 0.5,
-    blending: THREE.AdditiveBlending, depthWrite: false,
-  }));
-  glow.scale.setScalar(6);
-  group.add(glow);
+  // 保留一个不参与显示的材质槽给封面预取，镜面打开时直接复用高清纹理。
+  const labelMat = new THREE.MeshBasicMaterial({ visible: false });
+  const label = document.createElement('div');
+  label.className = 'songStarLabel';
+  label.textContent = node.name;
+  document.body.appendChild(label);
   (disc as any).__vinyl = null; // 稍后回填
   (hit as any).__vinyl = null;
-  return { node, group, disc, hit, labelMat, glow, orbR: 0, orbSpeed: 0, phase: 0, incl: new THREE.Euler(), base: 1, coverState: 0, info: null };
+  return { node, group, disc, hit, labelMat, glow: disc, label, index: 0, total: 0, base, coverState: 0, info: null };
 }
 
 /* 封面/试听预取 */
@@ -534,7 +506,7 @@ const MODE_LABEL: Record<Mode, string> = {
 };
 const HINTS: Partial<Record<Mode, string>> = {
   cruise: '拖拽 环视 · WASD 手动驾驶 · V 视角 · 点星系 入轨 · P 暂停 · M 静音',
-  orbit: '拖拽 环视 · 点唱片 打开粒子镜面 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
+  orbit: '拖拽 环视 · 点歌曲亮星 打开粒子镜面 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
   mirror: '移动鼠标 扰动粒子 · 点击镜面 涟漪 · ESC 返回轨道 · P 暂停 · M 静音',
   surface: '拖拽 环视 · N 下一着陆点 · 点星系 跃迁 · WASD/ESC 起飞 · P 暂停 · M 静音',
 };
@@ -723,33 +695,30 @@ function flyBezier(opts: {
   });
 }
 
-/* ============ 轨道唱片装配 ============ */
+/* ============ 星云旋臂上的歌曲亮星装配 ============ */
 function buildVinyls(p: Planet) {
   if (p.vinylRoot) return;
   const root = new THREE.Group();
-  root.position.copy(p.root.position);
   const songs = p.a.songs.slice(0, 12);
   songs.forEach((node, i) => {
     const v = makeVinyl(node, p.a.css, p.a.color);
-    v.orbR = p.r * (2.15 + (i % 3) * 0.42);
-    v.orbSpeed = 0.16 - (i % 4) * 0.018;
-    v.phase = (i / songs.length) * Math.PI * 2;
-    v.incl = new THREE.Euler(((i % 5) - 2) * 0.16, 0, ((i % 4) - 1.5) * 0.12);
-    v.base = p.r / 92;
-    v.group.scale.setScalar(v.base);
+    v.index = i;
+    v.total = songs.length;
+    p.nebula.songPosition(i, songs.length, v.group.position);
     (v.disc as any).__vinyl = v;
     (v.hit as any).__vinyl = v;
     root.add(v.group);
     p.vinyls.push(v);
   });
   p.vinylRoot = root;
-  scene.add(root);
-  // 预取前 6 首封面,其余悬停/降落时再取
+  p.nebula.group.add(root);
+  // 预取前 6 首封面，其余悬停/打开镜面时再取。
   p.vinyls.slice(0, 6).forEach((v, i) => setTimeout(() => ensureTrack(v), i * 260));
 }
 function disposeVinyls(p: Planet) {
   if (!p.vinylRoot) return;
-  scene.remove(p.vinylRoot);
+  p.nebula.group.remove(p.vinylRoot);
+  p.vinyls.forEach((v) => v.label.remove());
   p.vinylRoot = null;
   p.vinyls = [];
 }
@@ -785,7 +754,7 @@ function approachPlanet(p: Planet) {
   flyBezier({
     to, look: p.root.position,
     warp: 0.55, roll: 0.34, style: 'launch',
-    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 张唱片在轨道上`); },
+    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 颗歌曲亮星已显现`); },
   });
 }
 
@@ -814,7 +783,7 @@ function hyperjumpTo(p: Planet) {
   flyBezier({
     to, look: p.root.position,
     warp: 0.55, roll: 0.34, style: 'launch',
-    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 张唱片在轨道上`); },
+    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 颗歌曲亮星已显现`); },
   });
 }
 
@@ -1622,18 +1591,20 @@ function tick() {
     highs: audio.bands.high,
   }, camera);
 
-  // ---- 唱片轨道 ----
+  // ---- 歌曲亮星：与 Bezier Stable 星云使用同一旋臂参数和密度波转速 ----
   if (focus?.vinylRoot) {
     for (const v of focus.vinyls) {
-      const ang = v.phase + t * v.orbSpeed;
-      tmpV.set(Math.cos(ang) * v.orbR, 0, Math.sin(ang) * v.orbR).applyEuler(v.incl);
-      v.group.position.copy(tmpV);
-      v.group.rotation.y += dt * 1.6;
-      v.group.rotation.z = Math.sin(t * 0.7 + v.phase) * 0.12;
+      focus.nebula.songPosition(v.index, v.total, v.group.position);
       const isHover = v === hoverVinyl;
-      const s = v.base * (isHover ? 1.38 : 1);
-      v.group.scale.lerp(tmpV2.setScalar(s), 1 - Math.exp(-dt * 9));
-      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 0.38 : 0.08;
+      const twinkle = 1 + Math.sin(t * 2.2 + v.index * 2.7) * 0.05;
+      const s = v.base * twinkle * (isHover ? 1.32 : 1);
+      v.disc.scale.lerp(tmpV2.setScalar(s), 1 - Math.exp(-dt * 9));
+      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 1 : 0.9;
+
+      const showLabel = MODE === 'orbit' && focus.vinylRoot.visible;
+      const labelX = ((v.index % 3) - 1) * 18;
+      const labelVisible = showLabel && projectTo(v.label, v.group.getWorldPosition(tmpV3), labelX, v.index % 2 ? 18 : -32);
+      v.label.style.opacity = labelVisible ? (isHover ? '1' : '0.82') : '0';
     }
   }
   if (dockVinyl) {

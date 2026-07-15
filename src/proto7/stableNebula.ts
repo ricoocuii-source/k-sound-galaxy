@@ -8,12 +8,14 @@ import {
   SMOKE_VERT,
   makeGlowTexture,
   makeSmokeAtlas,
+  makeStarSpikeTexture,
 } from '../engine/GalaxyEngine';
 import { CORE_WHITE, paletteFor, refineColor } from '../engine/palette';
 
 export interface StableNebulaAssets {
   glow: THREE.Texture;
   smoke: THREE.Texture;
+  spike: THREE.Texture;
 }
 
 export interface StableNebulaAudio {
@@ -32,10 +34,11 @@ export interface StableNebulaVisual {
   radius: number;
   tick: (dt: number, audio: StableNebulaAudio, cameraDistance: number) => void;
   setDimmed: (dimmed: boolean) => void;
+  songPosition: (index: number, total: number, out: THREE.Vector3) => THREE.Vector3;
 }
 
 export function createStableNebulaAssets(): StableNebulaAssets {
-  return { glow: makeGlowTexture(), smoke: makeSmokeAtlas() };
+  return { glow: makeGlowTexture(), smoke: makeSmokeAtlas(), spike: makeStarSpikeTexture() };
 }
 
 function seeded(id: string) {
@@ -307,5 +310,22 @@ export function createStableNebulaVisual(options: {
     (veil.material as THREE.SpriteMaterial).opacity = 0.055 * veilFade * THREE.MathUtils.lerp(0.02, 1, dim);
   };
 
-  return { group, cloudMat, gasMat, dustMat, mistMat, core, veil, radius: R, tick, setDimmed };
+  const songPosition = (index: number, total: number, out: THREE.Vector3) => {
+    const arm = index % armCount;
+    const perArm = Math.ceil(total / armCount);
+    const slot = Math.floor(index / armCount);
+    const t = 0.3 + 0.64 * (perArm <= 1 ? 0.5 : slot / (perArm - 1));
+    const j1 = Math.sin(index * 12.9898) * 0.5 + Math.sin(index * 4.1) * 0.5;
+    const j2 = Math.sin(index * 7.7 + 2.1);
+    // Artist mode expands the cloud in the original engine. Keep song stars on
+    // that expanded arm envelope so 10-12 titles remain readable around the core.
+    const radius = R * armR(t) * (1 + ((index % 3) - 1) * 0.085 + j1 * 0.03) * 1.2;
+    const theta0 = armPhase + arm * armSep + t * turns + j2 * 0.16;
+    const height = Math.sin(index * 2.3) * R * 0.035;
+    const speed = 0.185 * 0.82 + (1.6 / (Math.sqrt(radius) + 2)) * 0.18;
+    const theta = theta0 + spinTime * speed;
+    return out.set(Math.cos(theta) * radius, height, Math.sin(theta) * radius);
+  };
+
+  return { group, cloudMat, gasMat, dustMat, mistMat, core, veil, radius: R, tick, setDimmed, songPosition };
 }

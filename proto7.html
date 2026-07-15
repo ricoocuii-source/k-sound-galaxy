@@ -122,6 +122,17 @@
       .vinylTag.show { opacity: 1; }
       .vinylTag em { font-style: normal; color: var(--acc); font-size: 8.5px; letter-spacing: 0.26em; display: block; margin-top: 2px; }
 
+      /* ---------- Bezier Stable 歌曲亮星标题 ---------- */
+      .songStarLabel {
+        position: fixed; left: 0; top: 0; z-index: 18; width: 92px;
+        margin-left: -46px; pointer-events: none; user-select: none;
+        color: rgba(237, 231, 219, 0.96); text-align: center;
+        font-family: var(--sans); font-size: 9.5px; font-weight: 500;
+        line-height: 1.15; letter-spacing: 0.08em;
+        text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,0,0.95);
+        opacity: 0; transition: opacity 0.2s ease; will-change: transform;
+      }
+
       /* ---------- 轨道态：星系卡 ---------- */
       .pcard {
         left: 30px; top: 50%; transform: translateY(-50%) translateX(-16px); width: 246px;
