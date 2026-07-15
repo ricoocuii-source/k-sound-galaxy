@@ -96,7 +96,7 @@ interface SongStarEntry {
 // Spiral-disk galaxy particles. Per-particle color is precomputed on the CPU
 // (core→arm→accent→deep along the radius, plus dark dust); the shader only
 // handles Keplerian differential rotation, soft gaussian falloff and twinkle.
-const NEBULA_VERT = /* glsl */ `
+export const NEBULA_VERT = /* glsl */ `
   attribute float aRadius;    // disk-plane radius
   attribute float aTheta;     // initial azimuth (arm shape baked in)
   attribute float aHeight;    // disk thickness offset
@@ -127,7 +127,7 @@ const NEBULA_VERT = /* glsl */ `
   }
 `;
 
-const NEBULA_FRAG = /* glsl */ `
+export const NEBULA_FRAG = /* glsl */ `
   uniform float uOpacity;
   uniform float uBrightness;
   varying vec3 vColor;
@@ -147,7 +147,7 @@ const NEBULA_FRAG = /* glsl */ `
 // Large rotating smoke billboards riding the same Keplerian spin as the disk.
 // Each puff slowly self-rotates (vRot), picks one of 4 atlas silhouettes, and
 // is pseudo-lit by the galactic core (bright toward the core, shadowed away).
-const SMOKE_VERT = /* glsl */ `
+export const SMOKE_VERT = /* glsl */ `
   attribute float aRadius;
   attribute float aTheta;
   attribute float aHeight;
@@ -189,7 +189,7 @@ const SMOKE_VERT = /* glsl */ `
   }
 `;
 
-const SMOKE_FRAG = /* glsl */ `
+export const SMOKE_FRAG = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uOpacity;
   uniform float uLightGain;   // strength of the core-side illumination
@@ -224,7 +224,7 @@ const SMOKE_FRAG = /* glsl */ `
 // Continuous procedural mist disk — the seamless "gas flow" underlying the
 // discrete puffs. Arm pattern matches the particle parameterization exactly
 // and shears with the same Keplerian spin. Fades out at grazing view angles.
-const MISTDISK_VERT = /* glsl */ `
+export const MISTDISK_VERT = /* glsl */ `
   uniform float uFocus;
   varying vec2 vUv;
   varying float vFacing;
@@ -242,7 +242,7 @@ const MISTDISK_VERT = /* glsl */ `
   }
 `;
 
-const MISTDISK_FRAG = /* glsl */ `
+export const MISTDISK_FRAG = /* glsl */ `
   uniform float uSpinTime;
   uniform float uOpacity;
   uniform float uArmPhase;
@@ -356,7 +356,7 @@ const STARS_FRAG = /* glsl */ `
 // ---------------------------------------------------------------- helpers
 
 /** Exponential-falloff glow — no visible edge at any scale. */
-function makeGlowTexture(): THREE.Texture {
+export function makeGlowTexture(): THREE.Texture {
   const SIZE = 256;
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;
@@ -388,7 +388,7 @@ function makeGlowTexture(): THREE.Texture {
  * stretch). Four distinct silhouettes so clustered puffs never read as
  * repeated "cotton balls".
  */
-function makeSmokeAtlas(): THREE.Texture {
+export function makeSmokeAtlas(): THREE.Texture {
   const CELL = 256;
   const SIZE = CELL * 2;
   const c = document.createElement('canvas');
@@ -473,7 +473,7 @@ function makeSmokeAtlas(): THREE.Texture {
 }
 
 /** Astro-photography diffraction spikes — the "brightest star" look for songs. */
-function makeStarSpikeTexture(): THREE.Texture {
+export function makeStarSpikeTexture(): THREE.Texture {
   const SIZE = 256;
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;

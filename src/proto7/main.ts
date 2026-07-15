@@ -4,10 +4,10 @@
  *
  * Prototype v7 · PLANETFALL 着陆计划
  * 范式：不是地图也不是电台——是一艘飞船。每位歌手是一座粒子星系，
- * 扫描 → 入轨 → 降落，着陆点就是一首歌。收集本身是玩法。
+ * 扫描 → 入轨 → 打开时间镜面，一面镜子就是一首歌。收集本身是玩法。
  *
  * 开源资产（不从零手绘）：
- *  - 歌手星系:The Milky-way galaxy by balongonick (CC BY 4.0),本地 /models/milky-way/
+ *  - 歌手星系:Bezier Stable 螺旋粒子、气尘、连续雾盘渲染
  *  - HUD 框架:augmented-ui v2 (MIT),本地 /vendor/
  *  - 天幕:ESO/S.Brunier 银河全景 (CC BY 4.0)
  *  - 镜头光斑:three.js 官方 Lensflare 纹理 (MIT)
@@ -28,6 +28,12 @@ import { gsap } from 'gsap';
 import { MUSIC_NODES } from '../data';
 import { MusicNode } from '../types';
 import { fetchTrackInfo, TrackInfo } from '../engine/itunes';
+import { TimeMirror } from '../engine/TimeMirror';
+import {
+  StableNebulaVisual,
+  createStableNebulaAssets,
+  createStableNebulaVisual,
+} from './stableNebula';
 // 超空间隧道方案暂下线(./tunnel.ts 完整保留,后期再调时重新挂载)
 
 /* ============ GSAP 手动驱动（防环境节流） ============ */
@@ -172,70 +178,17 @@ const starU = { uTime: { value: 0 }, uHigh: { value: 0 } };
   scene.add(new THREE.Points(g, m));
 }
 
-/* ============ 歌手星系:5 万点 Milky Way 模板,一次加载、25 次共享几何 ============ */
-const milkyWayTemplate = new Promise<THREE.Group>((resolve, reject) => {
-  new GLTFLoader().load('/models/milky-way/scene.gltf', (gltf) => {
-    gltf.scene.updateMatrixWorld(true);
-    const template = new THREE.Group();
-
-    gltf.scene.traverse((obj) => {
-      const source = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
-      if (!source.isPoints) return;
-      const geometry = source.geometry.clone();
-      geometry.applyMatrix4(source.matrixWorld);
-      template.add(new THREE.Points(geometry, source.material));
-    });
-
-    if (!template.children.length) {
-      reject(new Error('Milky Way GLTF does not contain a points primitive'));
-      return;
-    }
-
-    const box = new THREE.Box3().setFromObject(template);
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-    template.traverse((obj) => {
-      const points = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
-      if (!points.isPoints) return;
-      points.geometry.translate(-center.x, -center.y, -center.z);
-      points.geometry.computeBoundingBox();
-      points.geometry.computeBoundingSphere();
-    });
-    template.scale.setScalar(2 / Math.max(size.x, size.y, size.z));
-    resolve(template);
-  }, undefined, reject);
-});
-
-function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
-  milkyWayTemplate.then((template) => {
-    const instance = template.clone(true);
-    instance.traverse((obj) => {
-      const points = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
-      if (!points.isPoints) return;
-      const material = points.material.clone();
-      material.vertexColors = true;
-      material.color.copy(artist.color).lerp(new THREE.Color(0xffffff), 0.28);
-      material.size = 0.95;
-      // 粒子随透视距离同步缩放，避免远处过度堆叠、近处被摊薄。
-      material.sizeAttenuation = true;
-      material.transparent = true;
-      material.opacity = 0.032;
-      material.depthWrite = false;
-      material.blending = THREE.NormalBlending;
-      points.material = material;
-    });
-    visual.add(instance);
-  }).catch((error) => console.error('milky-way particle model failed:', error));
-}
+/* ============ 歌手星系：Bezier Stable 原版螺旋粒子 + 气尘 + 连续雾盘 ============ */
+const stableNebulaAssets = createStableNebulaAssets();
+const timeMirror = new TimeMirror(stableNebulaAssets.glow);
+scene.add(timeMirror.group);
 
 interface Planet {
   a: ArtistWorld;
   root: THREE.Group;
-  visual: THREE.Group;
-  galaxy: THREE.Group;
+  nebula: StableNebulaVisual;
   pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   r: number;
-  spin: number;
   vinylRoot: THREE.Group | null;
   vinyls: Vinyl[];
 }
@@ -252,19 +205,14 @@ for (const a of ARTISTS) {
   const root = new THREE.Group();
   root.position.set(Math.cos(th) * rad, y, Math.sin(th) * rad);
 
-  const visual = new THREE.Group();
-  // 固定在世界空间中的斜向姿态，让相机环绕时能真实看到模型厚度；不再始终正对镜头。
-  visual.rotation.set(
-    THREE.MathUtils.degToRad(42 + (i % 4) * 7),
-    th + Math.PI * 0.35,
-    THREE.MathUtils.degToRad(-18 + (i % 4) * 10),
-  );
-  root.add(visual);
-  const galaxy = new THREE.Group();
-  galaxy.scale.setScalar(r * 1.05);
-  galaxy.rotateY(i * 1.618);
-  visual.add(galaxy);
-  mountMilkyWayVisual(galaxy, a);
+  const nebula = createStableNebulaVisual({
+    id: a.id,
+    legacyColor: a.css,
+    radius: r,
+    assets: stableNebulaAssets,
+    pixelRatio: Math.min(window.devicePixelRatio, 2),
+  });
+  root.add(nebula.group);
 
   // 粒子盘只负责显示；透明球仅用于鼠标命中，飞行/轨道继续沿用原 r。
   const pickMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
@@ -274,7 +222,7 @@ for (const a of ARTISTS) {
   root.add(pickMesh);
 
   scene.add(root);
-  planets.push({ a, root, visual, galaxy, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
+  planets.push({ a, root, nebula, pickMesh, r, vinylRoot: null, vinyls: [] });
   pickPlanets.push(pickMesh);
 }
 
@@ -363,25 +311,36 @@ function makeVinyl(node: MusicNode, css: string, colorHex: THREE.Color): Vinyl {
 
 /* 封面/试听预取 */
 const trackCache = new Map<string, { info: TrackInfo | null; tex: THREE.Texture | null }>();
+const trackPromises = new Map<string, Promise<{ info: TrackInfo | null; tex: THREE.Texture | null }>>();
 async function ensureTrack(v: Vinyl) {
-  if (v.coverState !== 0) return;
-  v.coverState = 1;
   const cached = trackCache.get(v.node.id);
   if (cached) {
     v.info = cached.info;
     if (cached.tex) { v.labelMat.map = cached.tex; v.labelMat.needsUpdate = true; }
     v.coverState = 2; return;
   }
-  const info = await fetchTrackInfo(v.node);
-  v.info = info;
-  let tex: THREE.Texture | null = null;
-  if (info?.artworkUrlSmall) {
-    tex = await new Promise<THREE.Texture | null>((res) =>
-      texLoader.load(info.artworkUrlSmall!, (t) => { t.colorSpace = THREE.SRGBColorSpace; res(t); }, undefined, () => res(null))
-    );
-    if (tex) { v.labelMat.map = tex; v.labelMat.needsUpdate = true; }
+  v.coverState = 1;
+  let pending = trackPromises.get(v.node.id);
+  if (!pending) {
+    pending = (async () => {
+      const info = await fetchTrackInfo(v.node);
+      let tex: THREE.Texture | null = null;
+      const artworkUrl = info?.artworkUrl || info?.artworkUrlSmall;
+      if (artworkUrl) {
+        tex = await new Promise<THREE.Texture | null>((res) =>
+          texLoader.load(artworkUrl, (t) => { t.colorSpace = THREE.SRGBColorSpace; res(t); }, undefined, () => res(null))
+        );
+      }
+      const result = { info, tex };
+      trackCache.set(v.node.id, result);
+      return result;
+    })();
+    trackPromises.set(v.node.id, pending);
   }
-  trackCache.set(v.node.id, { info, tex });
+  const result = await pending;
+  trackPromises.delete(v.node.id);
+  v.info = result.info;
+  if (result.tex) { v.labelMat.map = result.tex; v.labelMat.needsUpdate = true; }
   v.coverState = 2;
 }
 
@@ -563,18 +522,20 @@ function toast(text: string) {
 }
 
 /* ============ 状态机 ============ */
-type Mode = 'idle' | 'cruise' | 'approach' | 'orbit' | 'landing' | 'surface' | 'takeoff';
+type Mode = 'idle' | 'cruise' | 'approach' | 'orbit' | 'landing' | 'mirror' | 'surface' | 'takeoff';
 let MODE: Mode = 'idle';
 let focus: Planet | null = null;
 let dockedVinyl: Vinyl | null = null;
 
 const MODE_LABEL: Record<Mode, string> = {
   idle: '待命 STANDBY', cruise: '巡航 CRUISE', approach: '入轨 APPROACH',
-  orbit: '轨道 ORBIT', landing: '降落 PLANETFALL', surface: '地表 SURFACE', takeoff: '起飞 ASCENT',
+  orbit: '轨道 ORBIT', landing: '镜面接近 APPROACH', mirror: '时间镜面 TIME MIRROR',
+  surface: '地表 SURFACE', takeoff: '起飞 ASCENT',
 };
 const HINTS: Partial<Record<Mode, string>> = {
   cruise: '拖拽 环视 · WASD 手动驾驶 · V 视角 · 点星系 入轨 · P 暂停 · M 静音',
-  orbit: '拖拽 环视 · 点唱片 降落播放 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
+  orbit: '拖拽 环视 · 点唱片 打开粒子镜面 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
+  mirror: '移动鼠标 扰动粒子 · 点击镜面 涟漪 · ESC 返回轨道 · P 暂停 · M 静音',
   surface: '拖拽 环视 · N 下一着陆点 · 点星系 跃迁 · WASD/ESC 起飞 · P 暂停 · M 静音',
 };
 function setMode(m: Mode) {
@@ -593,6 +554,7 @@ function setMode(m: Mode) {
 const steer = { x: 0, y: 0, tx: 0, ty: 0 };
 /* 自由环视:按住拖拽转头(全模式生效),松手保持朝向;点击与拖拽自动区分 */
 const view = { yaw: 0, pitch: 0, down: false, px: 0, py: 0, moved: false };
+let lastMirrorRippleAt = 0;
 addEventListener('pointerdown', (e) => {
   view.down = true; view.moved = false; view.px = e.clientX; view.py = e.clientY;
 });
@@ -611,6 +573,14 @@ addEventListener('pointermove', (e) => {
   }
   mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   mouseMoved = true;
+  if (MODE === 'mirror' && timeMirror.isOpen && performance.now() - lastMirrorRippleAt > 48) {
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(timeMirror.hitMesh, false);
+    if (hits[0]?.uv) {
+      timeMirror.addRipple(hits[0].uv.x, hits[0].uv.y, elapsed, 0.72);
+      lastMirrorRippleAt = performance.now();
+    }
+  }
 });
 const VIEW_UP = new THREE.Vector3(0, 1, 0);
 const lwDir = new THREE.Vector3(), lwRight = new THREE.Vector3(), lwTarget = new THREE.Vector3();
@@ -1224,38 +1194,75 @@ let dockVinyl: Vinyl | null = null;
 function landOnVinyl(v: Vinyl) {
   if (MODE !== 'orbit' || !focus) return;
   const p = focus;
+  drive.manual = false;
   setMode('landing');
-  say(`着陆点锁定:<b>${v.node.name}</b> · 穿越星云核心`);
-  ensureTrack(v);
+  say(`歌曲锁定:<b>${v.node.name}</b> · 粒子镜面正在形成`);
+  audio.stop();
+  el.np.classList.remove('show');
 
-  // 着陆相机位:从星系中心指向唱片轨道位的方向,落在表面上空
-  const vWorld = v.group.getWorldPosition(tmpV.clone());
-  const n = tmpV2.subVectors(vWorld, p.root.position).normalize();
-  const surf = p.root.position.clone().addScaledVector(n, p.r * 1.22);
-  // 视线压向地平线:切向
-  const tangent = tmpV3.crossVectors(n, new THREE.Vector3(0, 1, 0)).normalize();
-  if (tangent.lengthSq() < 0.01) tangent.set(1, 0, 0);
-  const look = surf.clone().addScaledVector(tangent, p.r * 1.3).addScaledVector(n, -p.r * 0.42);
+  mirrorVinyl = v;
+  mirrorPosition.copy(v.group.getWorldPosition(new THREE.Vector3()));
+  const approach = camera.position.clone().sub(mirrorPosition);
+  if (approach.lengthSq() < 0.001) approach.set(0, 0.15, 1);
+  approach.normalize();
+  const to = mirrorPosition.clone().addScaledVector(approach, 62);
+  to.y += 2;
 
-  audio.entryNoise(2.1);
-  // 星云穿越过场
-  gsap.to(el.entry, { opacity: 0.55, duration: 1.15, ease: 'power2.in', delay: 0.5 });
-  gsap.to(el.entry, { opacity: 0, duration: 0.8, ease: 'power2.out', delay: 2.05 });
-  gsap.to(camera, { fov: 74, duration: 1.4, ease: 'power2.in', onUpdate: () => camera.updateProjectionMatrix() });
-  gsap.to(camera, { fov: 58, duration: 1.0, ease: 'power2.out', delay: 1.7, onUpdate: () => camera.updateProjectionMatrix() });
-  shake = 0.001;
-  gsap.to(win, { shakeTo: 1, duration: 1.4, ease: 'power2.in', onUpdate: () => (shake = win.shakeTo * 0.8) });
-  gsap.to(win, { shakeTo: 0, duration: 0.7, ease: 'power3.out', delay: 1.9, onUpdate: () => (shake = win.shakeTo * 0.8) });
+  planets.forEach((planet) => planet.nebula.setDimmed(true));
+  if (p.vinylRoot) p.vinylRoot.visible = false;
+  timeMirror.setTexture(null);
+  timeMirror.open(mirrorPosition, p.a.css);
+  void ensureTrack(v).then(() => {
+    if (mirrorVinyl !== v || !timeMirror.isOpen) return;
+    timeMirror.setTexture(trackCache.get(v.node.id)?.tex ?? null);
+  });
 
-  resetView(1.2);
+  resetView(0.8);
   flyBezier({
-    to: surf, look, dur: 2.8, ease: 'power3.in', roll: 0.42, lift: -0.06,
+    to, look: mirrorPosition, dur: 2.35, ease: 'power2.inOut', roll: 0.18,
     onDone: () => {
-      setMode('surface');
-      initDrive();
-      dockThe(v);
-      playVinyl(v);
+      if (mirrorVinyl !== v || !timeMirror.isOpen) return;
+      setMode('mirror');
+      void playMirrorSong(v);
     },
+  });
+}
+
+let mirrorVinyl: Vinyl | null = null;
+const mirrorPosition = new THREE.Vector3();
+
+async function playMirrorSong(v: Vinyl) {
+  if (v.coverState !== 2) await ensureTrack(v);
+  const isNew = collect(v.node.id);
+  updateLogHud(focus);
+  if (isNew) toast(`图鉴 +1 · ${v.node.name}`);
+  if (v.info?.previewUrl) {
+    audio.play(v.info.previewUrl);
+    say(`时间镜面 · 正在播放 <b>${v.node.name}</b>`);
+  } else {
+    say(`时间镜面 · <b>${v.node.name}</b> 无试听源`);
+  }
+}
+
+function closeTimeMirror() {
+  if ((MODE !== 'mirror' && MODE !== 'landing') || !focus) return;
+  const p = focus;
+  setMode('takeoff');
+  audio.stop();
+  timeMirror.close();
+  mirrorVinyl = null;
+  if (flight) { gsap.killTweensOf(flight); flight = null; }
+  planets.forEach((planet) => planet.nebula.setDimmed(false));
+  if (p.vinylRoot) p.vinylRoot.visible = true;
+  const dist = p.r * 3.6;
+  const to = p.root.position.clone().add(new THREE.Vector3(
+    Math.cos(orbitAng) * dist,
+    p.r * 0.95,
+    Math.sin(orbitAng) * dist,
+  ));
+  flyBezier({
+    to, look: p.root.position, dur: 1.8, ease: 'power2.inOut', roll: -0.12,
+    onDone: () => { setMode('orbit'); initDrive(); say('镜面关闭 · 已返回歌手轨道'); },
   });
 }
 
@@ -1386,6 +1393,14 @@ function pick() {
 addEventListener('click', (e) => {
   // 拖拽环视松手不算点击
   if (view.moved) { view.moved = false; return; }
+  if (MODE === 'mirror') {
+    mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(timeMirror.hitMesh, false);
+    if (hits[0]?.uv) timeMirror.addRipple(hits[0].uv.x, hits[0].uv.y, elapsed, 1.15);
+    else closeTimeMirror();
+    return;
+  }
   if ((e.target as HTMLElement).closest('.np')) { audio.toggle(); el.np.classList.toggle('paused', !audio.playing); return; }
   if (hoverVinyl && MODE === 'orbit') landOnVinyl(hoverVinyl);
   else if (hoverPlanet) hyperjumpTo(hoverPlanet);
@@ -1397,6 +1412,7 @@ addEventListener('keydown', (e) => {
   drive.boost = e.shiftKey;
   if (WASD.includes(e.code)) {
     if (COMPARE) { drive.keys.add(e.code); return; }
+    if (MODE === 'mirror' || MODE === 'landing') return;
     if (flight) return;
     drive.keys.add(e.code);
     if (MODE === 'surface' && dockVinyl) undock();
@@ -1404,7 +1420,8 @@ addEventListener('keydown', (e) => {
     return;
   }
   if (e.code === 'Escape') {
-    if (MODE === 'surface') takeoffToOrbit();
+    if (MODE === 'mirror' || MODE === 'landing') closeTimeMirror();
+    else if (MODE === 'surface') takeoffToOrbit();
     else if (MODE === 'orbit') returnToCruise();
   }
   else if (e.code === 'KeyM') { audio.setMuted(!audio.muted); say(audio.muted ? '已静音' : '声音恢复'); }
@@ -1590,10 +1607,20 @@ function tick() {
     camera.rotateZ((Math.random() - 0.5) * shake * 0.02);
   }
 
-  // ---- 粒子星系：固定世界朝向，只保留稳定、缓慢的模型自转 ----
+  // ---- Bezier Stable 星云：GPU 螺旋密度波，固定 3D 姿态且不做模型缩放/抖动 ----
   for (const p of planets) {
-    p.galaxy.rotateY(dt * p.spin);
+    p.nebula.tick(
+      dt,
+      { intensity: (audio.bands.bass + audio.bands.mid + audio.bands.high) / 3, bass: audio.bands.bass },
+      camera.position.distanceTo(p.root.position),
+    );
   }
+  timeMirror.update(t, {
+    intensity: (audio.bands.bass + audio.bands.mid + audio.bands.high) / 3,
+    bass: audio.bands.bass,
+    mids: audio.bands.mid,
+    highs: audio.bands.high,
+  }, camera);
 
   // ---- 唱片轨道 ----
   if (focus?.vinylRoot) {
