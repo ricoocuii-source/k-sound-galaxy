@@ -206,11 +206,7 @@ const milkyWayTemplate = new Promise<THREE.Group>((resolve, reject) => {
   }, undefined, reject);
 });
 
-function mountMilkyWayVisual(
-  visual: THREE.Group,
-  artist: ArtistWorld,
-  particleMaterials: THREE.PointsMaterial[],
-) {
+function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
   milkyWayTemplate.then((template) => {
     const instance = template.clone(true);
     instance.traverse((obj) => {
@@ -226,7 +222,6 @@ function mountMilkyWayVisual(
       material.depthWrite = false;
       material.blending = THREE.NormalBlending;
       points.material = material;
-      particleMaterials.push(material);
     });
     visual.add(instance);
   }).catch((error) => console.error('milky-way particle model failed:', error));
@@ -237,7 +232,6 @@ interface Planet {
   root: THREE.Group;
   visual: THREE.Group;
   galaxy: THREE.Group;
-  particleMaterials: THREE.PointsMaterial[];
   pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   r: number;
   spin: number;
@@ -258,17 +252,18 @@ for (const a of ARTISTS) {
   root.position.set(Math.cos(th) * rad, y, Math.sin(th) * rad);
 
   const visual = new THREE.Group();
-  visual.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    camera.position.clone().sub(root.position).normalize(),
+  // 固定在世界空间中的斜向姿态，让相机环绕时能真实看到模型厚度；不再始终正对镜头。
+  visual.rotation.set(
+    THREE.MathUtils.degToRad(42 + (i % 4) * 7),
+    th + Math.PI * 0.35,
+    THREE.MathUtils.degToRad(-18 + (i % 4) * 10),
   );
   root.add(visual);
   const galaxy = new THREE.Group();
   galaxy.scale.setScalar(r * 1.05);
   galaxy.rotateY(i * 1.618);
   visual.add(galaxy);
-  const particleMaterials: THREE.PointsMaterial[] = [];
-  mountMilkyWayVisual(galaxy, a, particleMaterials);
+  mountMilkyWayVisual(galaxy, a);
 
   // 粒子盘只负责显示；透明球仅用于鼠标命中，飞行/轨道继续沿用原 r。
   const pickMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
@@ -278,7 +273,7 @@ for (const a of ARTISTS) {
   root.add(pickMesh);
 
   scene.add(root);
-  planets.push({ a, root, visual, galaxy, particleMaterials, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
+  planets.push({ a, root, visual, galaxy, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
   pickPlanets.push(pickMesh);
 }
 
@@ -676,12 +671,6 @@ let cruiseTheta = 0.2;
 const CRUISE_R = 2550, CRUISE_Y = 300;
 const camLook = new THREE.Vector3(0, 0, 0);
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3(), tmpL = new THREE.Vector3();
-const galaxyFaceDir = new THREE.Vector3();
-const galaxyFaceQuat = new THREE.Quaternion();
-const galaxyNormal = new THREE.Vector3(0, 1, 0);
-const galaxyWhite = new THREE.Color(0xffffff);
-const galaxyTint = new THREE.Color();
-
 function cruisePos(th: number, out: THREE.Vector3) {
   return out.set(Math.cos(th) * CRUISE_R, CRUISE_Y + Math.sin(th * 2.3) * 90, Math.sin(th) * CRUISE_R);
 }
@@ -1576,7 +1565,7 @@ function tick() {
     const p = focus, dist = p.r * 3.6;
     tmpV.set(
       p.root.position.x + Math.cos(orbitAng) * dist,
-      p.root.position.y + p.r * (0.95 + Math.sin(t * 0.5) * 0.12),
+      p.root.position.y + p.r * 0.95,
       p.root.position.z + Math.sin(orbitAng) * dist
     );
     camera.position.lerp(tmpV, 1 - Math.exp(-dt * 2.6));
@@ -1600,26 +1589,9 @@ function tick() {
     camera.rotateZ((Math.random() - 0.5) * shake * 0.02);
   }
 
-  // ---- 粒子星系自转/呼吸 ----
+  // ---- 粒子星系：固定世界朝向，只保留稳定、缓慢的模型自转 ----
   for (const p of planets) {
-    galaxyFaceDir.copy(camera.position).sub(p.root.position).normalize();
-    galaxyFaceQuat.setFromUnitVectors(galaxyNormal, galaxyFaceDir);
-    p.visual.quaternion.slerp(galaxyFaceQuat, 1 - Math.exp(-dt * 8));
     p.galaxy.rotateY(dt * p.spin);
-    const isFocused = p === focus;
-    const pulse = bass * (isFocused ? 0.028 : 0.01);
-    const scaleFactor = isFocused ? 3.25 : focus ? 0.72 : 1.05;
-    const targetScale = p.r * scaleFactor * (1 + pulse);
-    const scale = THREE.MathUtils.lerp(p.galaxy.scale.x, targetScale, 1 - Math.exp(-dt * 5));
-    p.galaxy.scale.setScalar(scale);
-    const targetOpacity = isFocused ? 0.26 : focus ? 0.003 : 0.032;
-    const targetPointSize = isFocused ? 0.9 : focus ? 0.72 : 0.95;
-    galaxyTint.copy(p.a.color).lerp(galaxyWhite, isFocused ? 0.84 : 0.28);
-    for (const material of p.particleMaterials) {
-      material.opacity = THREE.MathUtils.lerp(material.opacity, targetOpacity, 1 - Math.exp(-dt * 6));
-      material.size = THREE.MathUtils.lerp(material.size, targetPointSize, 1 - Math.exp(-dt * 6));
-      material.color.lerp(galaxyTint, 1 - Math.exp(-dt * 5));
-    }
   }
 
   // ---- 唱片轨道 ----
@@ -1774,7 +1746,7 @@ function tick() {
 
   // ---- 后期强度 ----
   bloom.strength = 0.7 + bass * 0.45 + warpU.uWarp.value * 0.7;
-  rgbPass.uniforms['amount'].value = (focus ? 0 : 0.0009) + warpU.uWarp.value * 0.004 + bass * 0.0006;
+  rgbPass.uniforms['amount'].value = 0.0009 + warpU.uWarp.value * 0.004 + bass * 0.0006;
   warpU.uTime.value = t;
 
   composer.render();
