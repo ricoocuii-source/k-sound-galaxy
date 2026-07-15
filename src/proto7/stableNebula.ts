@@ -10,7 +10,8 @@ import {
   makeSmokeAtlas,
   makeStarSpikeTexture,
 } from '../engine/GalaxyEngine';
-import { CORE_WHITE, paletteFor, refineColor } from '../engine/palette';
+
+const NEUTRAL_CORE = '#f4f6fa';
 
 export interface StableNebulaAssets {
   glow: THREE.Texture;
@@ -30,7 +31,6 @@ export interface StableNebulaVisual {
   dustMat: THREE.ShaderMaterial;
   mistMat: THREE.ShaderMaterial;
   core: THREE.Sprite;
-  veil: THREE.Sprite;
   radius: number;
   tick: (dt: number, audio: StableNebulaAudio, cameraDistance: number) => void;
   setDimmed: (dimmed: boolean) => void;
@@ -52,13 +52,11 @@ function seeded(id: string) {
 
 export function createStableNebulaVisual(options: {
   id: string;
-  legacyColor: string;
   radius: number;
   assets: StableNebulaAssets;
   pixelRatio: number;
 }): StableNebulaVisual {
   const { id, radius: R, assets, pixelRatio } = options;
-  const palette = paletteFor(refineColor(options.legacyColor));
   const group = new THREE.Group();
   group.name = `stable_nebula_${id}`;
 
@@ -83,11 +81,11 @@ export function createStableNebulaVisual(options: {
   const aPhase = new Float32Array(count);
   const aColor = new Float32Array(count * 3);
 
-  const cCore = new THREE.Color(CORE_WHITE);
-  const cArm = new THREE.Color(palette.arm);
-  const cAccent = new THREE.Color(palette.accent);
-  const cDust = new THREE.Color(palette.dust);
-  const cDeep = new THREE.Color(palette.deep);
+  const cCore = new THREE.Color(NEUTRAL_CORE);
+  const cArm = new THREE.Color('#b8bec8');
+  const cAccent = new THREE.Color('#e0e4ea');
+  const cDust = new THREE.Color('#50555f');
+  const cDeep = new THREE.Color('#23262d');
   const tmp = new THREE.Color();
 
   for (let i = 0; i < count; i++) {
@@ -259,7 +257,7 @@ export function createStableNebulaVisual(options: {
       uTurns: { value: turns },
       uRadius: { value: R },
       uSeed: { value: rand() * 40 },
-      uCore: { value: new THREE.Color(CORE_WHITE).multiplyScalar(0.85) },
+      uCore: { value: new THREE.Color(NEUTRAL_CORE).multiplyScalar(0.85) },
       uArm: { value: cArm.clone() },
       uAccent: { value: cAccent.clone().multiplyScalar(0.8) },
     },
@@ -270,7 +268,7 @@ export function createStableNebulaVisual(options: {
 
   const core = new THREE.Sprite(new THREE.SpriteMaterial({
     map: assets.glow,
-    color: new THREE.Color(CORE_WHITE),
+    color: new THREE.Color(NEUTRAL_CORE),
     transparent: true,
     opacity: 0.85,
     blending: THREE.AdditiveBlending,
@@ -278,17 +276,6 @@ export function createStableNebulaVisual(options: {
   }));
   core.scale.setScalar(R * 0.42);
   group.add(core);
-
-  const veil = new THREE.Sprite(new THREE.SpriteMaterial({
-    map: assets.glow,
-    color: cArm,
-    transparent: true,
-    opacity: 0.055,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-  }));
-  veil.scale.setScalar(R * 1.9);
-  group.add(veil);
 
   let dim = 1;
   let dimTarget = 1;
@@ -306,8 +293,7 @@ export function createStableNebulaVisual(options: {
     mistMat.uniforms.uOpacity.value = 0.27 * dim;
     // Keep the whole body stable: only light breathes with playback, geometry never shakes/scales.
     (core.material as THREE.SpriteMaterial).opacity = (0.72 + audio.intensity * 0.18) * THREE.MathUtils.lerp(0.02, 1, dim);
-    const veilFade = THREE.MathUtils.clamp(1 - (cameraDistance - 420) / 900, 0.18, 1);
-    (veil.material as THREE.SpriteMaterial).opacity = 0.055 * veilFade * THREE.MathUtils.lerp(0.02, 1, dim);
+    void cameraDistance;
   };
 
   const songPosition = (index: number, total: number, out: THREE.Vector3) => {
@@ -327,5 +313,5 @@ export function createStableNebulaVisual(options: {
     return out.set(Math.cos(theta) * radius, height, Math.sin(theta) * radius);
   };
 
-  return { group, cloudMat, gasMat, dustMat, mistMat, core, veil, radius: R, tick, setDimmed, songPosition };
+  return { group, cloudMat, gasMat, dustMat, mistMat, core, radius: R, tick, setDimmed, songPosition };
 }

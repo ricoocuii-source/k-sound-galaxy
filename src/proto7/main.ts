@@ -9,8 +9,7 @@
  * 开源资产（不从零手绘）：
  *  - 歌手星系:Bezier Stable 螺旋粒子、气尘、连续雾盘渲染
  *  - HUD 框架:augmented-ui v2 (MIT),本地 /vendor/
- *  - 天幕:ESO/S.Brunier 银河全景 (CC BY 4.0)
- *  - 镜头光斑:three.js 官方 Lensflare 纹理 (MIT)
+ *  - 天幕:中性程序化深空背景
  *  - 超空间:Star Nest by Pablo Roman Andrioli (MIT)
  * 轨迹:全部飞行走 THREE.CubicBezierCurve3。
  */
@@ -22,7 +21,6 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
-import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { gsap } from 'gsap';
 import { MUSIC_NODES } from '../data';
@@ -97,43 +95,19 @@ texLoader.setCrossOrigin('anonymous');
 const loadTex = (url: string, onOk?: (t: THREE.Texture) => void) =>
   texLoader.load(url, (t) => onOk?.(t), undefined, () => console.warn('tex fail:', url));
 
-/* ============ 天幕：ESO 银河全景 ============ */
-const skyMat = new THREE.MeshBasicMaterial({ color: 0x0c0f18, side: THREE.BackSide, depthWrite: false, fog: false });
+/* ============ 中性深空天幕：去掉低饱和度彩色银河雾光 ============ */
+const skyMat = new THREE.MeshBasicMaterial({ color: 0x03050a, side: THREE.BackSide, depthWrite: false, fog: false });
 const skyMesh = new THREE.Mesh(new THREE.SphereGeometry(26000, 64, 40), skyMat);
 skyMesh.rotation.set(0.34, 0, 0.3);
 scene.add(skyMesh);
-let skyLoaded = false;
-loadTex('https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/ESO_-_Milky_Way.jpg/3840px-ESO_-_Milky_Way.jpg', (t) => {
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.mapping = THREE.EquirectangularReflectionMapping;
-  skyMat.map = t; skyMat.color.set(0xaab4ca); skyMat.needsUpdate = true; skyLoaded = true;
-});
+const skyLoaded = true;
 
-/* ============ 光照 + 恒星 ============ */
+/* ============ 中性光照 ============ */
 scene.add(new THREE.AmbientLight(0x8b93b8, 0.5));
-const SUN_POS = new THREE.Vector3(-3400, 1500, -2600);
-// 电影式布光:key light 跟随相机后上方,保证可见面永远受光(太阳只当景观)
+// 电影式布光:key light 跟随相机后上方,保证飞船可见面始终受光。
 const keyLight = new THREE.DirectionalLight(0xfff2dd, 2.3);
 scene.add(keyLight);
 scene.add(keyLight.target);
-
-const sunMat = new THREE.MeshBasicMaterial({ color: 0xffe6b8 });
-const sun = new THREE.Mesh(new THREE.SphereGeometry(230, 48, 32), sunMat);
-sun.position.copy(SUN_POS);
-scene.add(sun);
-loadTex('/textures/2k_sun.jpg', (t) => { t.colorSpace = THREE.SRGBColorSpace; sunMat.map = t; sunMat.needsUpdate = true; });
-
-const FLARE_BASE = 'https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/lensflare/';
-loadTex(FLARE_BASE + 'lensflare0.png', (f0) => {
-  loadTex(FLARE_BASE + 'lensflare3.png', (f3) => {
-    const lf = new Lensflare();
-    lf.addElement(new LensflareElement(f0, 420, 0, new THREE.Color(0xffe2b0)));
-    lf.addElement(new LensflareElement(f3, 70, 0.42));
-    lf.addElement(new LensflareElement(f3, 120, 0.72));
-    lf.addElement(new LensflareElement(f3, 52, 0.94));
-    sun.add(lf);
-  });
-});
 
 /* ============ 星野（twinkle + 高频响应） ============ */
 const starU = { uTime: { value: 0 }, uHigh: { value: 0 } };
@@ -207,7 +181,6 @@ for (const a of ARTISTS) {
 
   const nebula = createStableNebulaVisual({
     id: a.id,
-    legacyColor: a.css,
     radius: r,
     assets: stableNebulaAssets,
     pixelRatio: Math.min(window.devicePixelRatio, 2),
@@ -251,9 +224,9 @@ const glowTexShared = (() => {
   return new THREE.CanvasTexture(cv);
 })();
 
-function makeVinyl(node: MusicNode, _css: string, colorHex: THREE.Color): Vinyl {
+function makeVinyl(node: MusicNode): Vinyl {
   const group = new THREE.Group();
-  const starColor = colorHex.clone().lerp(new THREE.Color(0xffffff), 0.86);
+  const starColor = new THREE.Color(0xf4f6fa);
   const disc = new THREE.Sprite(new THREE.SpriteMaterial({
     map: stableNebulaAssets.spike,
     color: starColor,
@@ -314,23 +287,6 @@ async function ensureTrack(v: Vinyl) {
   v.info = result.info;
   if (result.tex) { v.labelMat.map = result.tex; v.labelMat.needsUpdate = true; }
   v.coverState = 2;
-}
-
-/* ============ 星尘氛围带:应援色大辉光,给宇宙上底色 ============ */
-{
-  for (let k = 0; k < 90; k++) {
-    const a = ARTISTS[k % ARTISTS.length];
-    const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTexShared, color: a.color.clone().lerp(new THREE.Color(0x222233), 0.25),
-      transparent: true, opacity: 0.05 + (k % 3) * 0.02,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-    }));
-    const th = k * 2.39996 * 1.7 + 1.3;
-    const rad = 380 + Math.pow(k / 90, 0.7) * 2900;
-    sp.position.set(Math.cos(th) * rad, Math.sin(k * 7.31) * 520, Math.sin(th) * rad);
-    sp.scale.setScalar(420 + (k % 7) * 160);
-    scene.add(sp);
-  }
 }
 
 /* ============ Star Nest 超空间层（MIT） ============ */
@@ -701,7 +657,7 @@ function buildVinyls(p: Planet) {
   const root = new THREE.Group();
   const songs = p.a.songs.slice(0, 12);
   songs.forEach((node, i) => {
-    const v = makeVinyl(node, p.a.css, p.a.color);
+    const v = makeVinyl(node);
     v.index = i;
     v.total = songs.length;
     p.nebula.songPosition(i, songs.length, v.group.position);
@@ -1180,7 +1136,7 @@ function landOnVinyl(v: Vinyl) {
   planets.forEach((planet) => planet.nebula.setDimmed(true));
   if (p.vinylRoot) p.vinylRoot.visible = false;
   timeMirror.setTexture(null);
-  timeMirror.open(mirrorPosition, p.a.css);
+  timeMirror.open(mirrorPosition, '#d8dde8');
   void ensureTrack(v).then(() => {
     if (mirrorVinyl !== v || !timeMirror.isOpen) return;
     timeMirror.setTexture(trackCache.get(v.node.id)?.tex ?? null);
@@ -1242,7 +1198,7 @@ function dockThe(v: Vinyl) {
   // 轨道上的本体隐藏,舱内摆一张同款唱片
   v.group.visible = false;
   if (dockVinyl) { dockGroup.remove(dockVinyl.group); dockVinyl = null; }
-  const d = makeVinyl(v.node, focus!.a.css, focus!.a.color);
+  const d = makeVinyl(v.node);
   d.info = v.info;
   const cached = trackCache.get(v.node.id);
   if (cached?.tex) { d.labelMat.map = cached.tex; d.labelMat.needsUpdate = true; }
