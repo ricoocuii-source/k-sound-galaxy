@@ -97,7 +97,7 @@
       .np .meta span.state { display: none; margin-top: 5px; font-size: 8.5px; letter-spacing: 0.22em; color: var(--dim); }
       .np.paused .meta span.state { display: block; }
 
-      /* ---------- 锁定框（跟踪行星） ---------- */
+      /* ---------- 锁定框（跟踪星系） ---------- */
       .reticle {
         left: 0; top: 0; padding: 10px 16px 10px 14px; pointer-events: none;
         opacity: 0; transition: opacity 0.25s;
@@ -122,7 +122,7 @@
       .vinylTag.show { opacity: 1; }
       .vinylTag em { font-style: normal; color: var(--acc); font-size: 8.5px; letter-spacing: 0.26em; display: block; margin-top: 2px; }
 
-      /* ---------- 轨道态：行星卡 ---------- */
+      /* ---------- 轨道态：星系卡 ---------- */
       .pcard {
         left: 30px; top: 50%; transform: translateY(-50%) translateX(-16px); width: 246px;
         padding: 18px 18px 15px; opacity: 0; pointer-events: none;
@@ -142,7 +142,7 @@
       .pcard .stats u { text-decoration: none; color: var(--ink); }
       .pcard .go { margin-top: 14px; font-size: 9px; letter-spacing: 0.24em; color: var(--acc); }
 
-      /* ---------- 大气进入过场 ---------- */
+      /* ---------- 星云穿越过场 ---------- */
       .entry {
         position: fixed; inset: 0; z-index: 26; pointer-events: none; opacity: 0;
         background:
@@ -209,7 +209,7 @@
 
     <div class="ui title">
       <b>K SOUND GALAXY</b>
-      <small>PROTOTYPE V7 · PLANETFALL 着陆计划 — 每位歌手是一颗行星</small>
+      <small>PROTOTYPE V7 · PLANETFALL 着陆计划 — 每位歌手是一座粒子星系</small>
       <span class="mode" id="mode" data-augmented-ui="tl-clip br-clip border">巡航 CRUISE</span>
     </div>
 
@@ -249,7 +249,7 @@
       <span class="k">ORBIT · 已入轨</span>
       <b class="nm" id="pcName">—</b>
       <div class="cn" id="pcCn">—</div>
-      <div class="row"><i class="chip"></i><span>应援色 · 行星大气</span></div>
+      <div class="row"><i class="chip"></i><span>应援色 · 粒子星云</span></div>
       <div class="stats">
         <span>轨道唱片 <u id="pcSongs">0</u> 张</span>
         <span>本星图鉴 <u id="pcLog">0</u> 收集</span>
@@ -259,16 +259,16 @@
 
     <div class="ui toast" id="toast" data-augmented-ui="tl-clip br-clip border">图鉴 +1</div>
 
-    <div class="ui hint" id="hint">拖拽 环视 · WASD 手动驾驶 · V 机体视角 · 点行星 入轨 · 点唱片 降落 · M 静音</div>
+    <div class="ui hint" id="hint">拖拽 环视 · WASD 手动驾驶 · V 机体视角 · 点星系 入轨 · 点唱片 降落 · M 静音</div>
 
     <div class="ui att">
-      星船 Star Fighter © 3DHaupt (CC BY-NC · 非商用) · 行星纹理 © Solar System Scope (CC BY 4.0)<br/>
-      大气散射 wwwtyro/glsl-atmosphere (公有领域) · HUD augmented-ui (MIT) · 天幕 ESO/S.Brunier (CC BY 4.0)<br/>
+      星船 Star Fighter © 3DHaupt (CC BY-NC · 非商用) · 星系模型 The Milky-way galaxy © balongonick (CC BY 4.0)<br/>
+      HUD augmented-ui (MIT) · 天幕 ESO/S.Brunier (CC BY 4.0)<br/>
       光斑/引擎 three.js (MIT) · warp Star Nest © Kali (MIT) · 音源 iTunes 30s 试听
     </div>
 
     <div class="ignite" id="ignite">
-      <div class="fm">PLANETFALL PROGRAM · 25 PLANETS</div>
+      <div class="fm">PLANETFALL PROGRAM · 25 GALAXIES</div>
       <h1>着 陆 计 划</h1>
       <p>点 击 点 火 · 戴 上 耳 机</p>
     </div>

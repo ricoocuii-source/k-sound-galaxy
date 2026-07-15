@@ -2,7 +2,7 @@
 
 This branch is the clean iteration baseline for the Planetfall experience:
 
-- 25 artists rendered as true spherical worlds
+- 25 artists rendered from a shared 50,000-point Milky Way model
 - a visible Star Fighter with two wingmen
 - free-look, WASD flight and two ship camera rigs
 - cubic Bezier transitions for approach, landing and return flights
@@ -35,9 +35,9 @@ The Vite build explicitly includes both `index.html` and `proto7.html`.
 
 - The bundled Star Fighter is licensed CC BY-NC 4.0 and is not cleared for
   commercial use. Keep `models/starfighter/license.txt` with the model.
-- Planet textures are credited to Solar System Scope under CC BY 4.0 in the
-  experience attribution.
+- The artist-galaxy model is “The Milky-way galaxy” by balongonick, licensed
+  under CC BY 4.0. Keep `models/milky-way/license.txt` with the model.
 - The HUD uses augmented-ui under MIT.
 - The Milky Way sky, lens flares, artwork and audio previews load from external
-  services; the local ship and spherical worlds still render if those requests
+  services; the local ship and particle galaxies still render if those requests
   are unavailable.

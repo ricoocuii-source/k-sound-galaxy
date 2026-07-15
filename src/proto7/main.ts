@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Prototype v7 · PLANETFALL 着陆计划
- * 范式：不是地图也不是电台——是一艘飞船。每位歌手是一颗行星，
+ * 范式：不是地图也不是电台——是一艘飞船。每位歌手是一座粒子星系，
  * 扫描 → 入轨 → 降落，着陆点就是一首歌。收集本身是玩法。
  *
  * 开源资产（不从零手绘）：
- *  - 行星纹理:Solar System Scope (CC BY 4.0),本地 /textures/
+ *  - 歌手星系:The Milky-way galaxy by balongonick (CC BY 4.0),本地 /models/milky-way/
  *  - HUD 框架:augmented-ui v2 (MIT),本地 /vendor/
- *  - 大气辉光:社区标准 fresnel atmosphere 画法
  *  - 天幕:ESO/S.Brunier 银河全景 (CC BY 4.0)
  *  - 镜头光斑:three.js 官方 Lensflare 纹理 (MIT)
  *  - 超空间:Star Nest by Pablo Roman Andrioli (MIT)
@@ -29,13 +28,12 @@ import { gsap } from 'gsap';
 import { MUSIC_NODES } from '../data';
 import { MusicNode } from '../types';
 import { fetchTrackInfo, TrackInfo } from '../engine/itunes';
-import { ATMOSPHERE_GLSL } from './atmosphere-glsl';
 // 超空间隧道方案暂下线(./tunnel.ts 完整保留,后期再调时重新挂载)
 
 /* ============ GSAP 手动驱动（防环境节流） ============ */
 gsap.ticker.remove(gsap.updateRoot);
 
-/* ============ 数据：按歌手聚合出 25 颗行星 ============ */
+/* ============ 数据：按歌手聚合出 25 座星系 ============ */
 interface ArtistWorld {
   idx: number;
   id: string;
@@ -92,12 +90,6 @@ const texLoader = new THREE.TextureLoader();
 texLoader.setCrossOrigin('anonymous');
 const loadTex = (url: string, onOk?: (t: THREE.Texture) => void) =>
   texLoader.load(url, (t) => onOk?.(t), undefined, () => console.warn('tex fail:', url));
-
-const PLANET_TEXS = [
-  '2k_ceres_fictional', '2k_eris_fictional', '2k_haumea_fictional', '2k_makemake_fictional',
-  '2k_mars', '2k_neptune', '2k_jupiter', '2k_venus_atmosphere', '2k_uranus',
-  '2k_earth_nightmap', '2k_moon',
-].map((n) => `/textures/${n}.jpg`);
 
 /* ============ 天幕：ESO 银河全景 ============ */
 const skyMat = new THREE.MeshBasicMaterial({ color: 0x0c0f18, side: THREE.BackSide, depthWrite: false, fog: false });
@@ -180,75 +172,67 @@ const starU = { uTime: { value: 0 }, uHigh: { value: 0 } };
   scene.add(new THREE.Points(g, m));
 }
 
-/* ============ 赛博行星 shader:纹理只当地貌,颜色全映射到应援色 ============ */
-const PLANET_VERT = `
-  varying vec3 vN; varying vec3 vV; varying vec2 vUv;
-  void main() {
-    vN = normalize(normalMatrix * normal);
-    vUv = uv;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vV = normalize(-mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }`;
-const PLANET_FRAG = `
-  uniform sampler2D uMap; uniform float uHasMap;
-  uniform vec3 uColorA; uniform vec3 uColorB; uniform vec3 uLightDir;
-  uniform float uTime; uniform float uBeat; uniform float uNear;
-  varying vec3 vN; varying vec3 vV; varying vec2 vUv;
-  void main() {
-    vec3 N = normalize(vN);
-    float NV = max(dot(N, normalize(vV)), 0.0);
-    float lum = uHasMap > 0.5 ? dot(texture2D(uMap, vUv).rgb, vec3(0.299, 0.587, 0.114)) : 0.5;
-    // S 曲线拉对比:暗部沉黑,亮部窜到高饱和应援色
-    float m = smoothstep(0.1, 0.88, pow(lum, 1.1));
-    vec3 col = mix(uColorA, uColorB * 1.25, m);
-    float lam = dot(N, normalize(uLightDir));
-    col *= 0.3 + 0.62 * max(lam, 0.0);
-    // 霓虹晨昏线(主视觉签名,HDR 喂 bloom;近距离衰减防光柱)
-    float term = smoothstep(-0.02, 0.04, lam) * (1.0 - smoothstep(0.04, 0.16, lam));
-    col += uColorB * term * (1.2 + uBeat * 0.9) * uNear;
-    // 流动扫描纬线:只在正对面淡淡走
-    float scan = smoothstep(0.985, 1.0, sin(vUv.y * 40.0 - uTime * 0.5));
-    col += uColorB * scan * 0.18 * NV;
-    // 边缘内发光
-    float fres = pow(1.0 - NV, 3.2);
-    col += uColorB * fres * (0.42 + uBeat * 0.55);
-    gl_FragColor = vec4(col, 1.0);
-  }`;
+/* ============ 歌手星系:5 万点 Milky Way 模板,一次加载、25 次共享几何 ============ */
+const milkyWayTemplate = new Promise<THREE.Group>((resolve, reject) => {
+  new GLTFLoader().load('/models/milky-way/scene.gltf', (gltf) => {
+    gltf.scene.updateMatrixWorld(true);
+    const template = new THREE.Group();
 
-const ATMO_VERT = `
-  varying vec3 vN; varying vec3 vV;
-  void main() {
-    vN = normalize(normalMatrix * normal);
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vV = normalize(-mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }`;
-const ATMO_FRAG = `
-  uniform vec3 uColor; uniform float uBeat; uniform float uBoost;
-  varying vec3 vN; varying vec3 vV;
-  void main() {
-    float rim = pow(max(0.0, 0.74 - dot(vN, vV)), 3.4);
-    float a = rim * (0.6 + uBeat * 0.9) * uBoost;
-    gl_FragColor = vec4(uColor * (1.25 + uBeat * 0.8), a);
-  }`;
+    gltf.scene.traverse((obj) => {
+      const source = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+      if (!source.isPoints) return;
+      const geometry = source.geometry.clone();
+      geometry.applyMatrix4(source.matrixWorld);
+      template.add(new THREE.Points(geometry, source.material));
+    });
 
-interface PlanetU {
-  uMap: { value: THREE.Texture | null };
-  uHasMap: { value: number };
-  uColorA: { value: THREE.Color };
-  uColorB: { value: THREE.Color };
-  uLightDir: { value: THREE.Vector3 };
-  uTime: { value: number };
-  uBeat: { value: number };
-  uNear: { value: number };
+    if (!template.children.length) {
+      reject(new Error('Milky Way GLTF does not contain a points primitive'));
+      return;
+    }
+
+    const box = new THREE.Box3().setFromObject(template);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    template.traverse((obj) => {
+      const points = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+      if (!points.isPoints) return;
+      points.geometry.translate(-center.x, -center.y, -center.z);
+      points.geometry.computeBoundingBox();
+      points.geometry.computeBoundingSphere();
+    });
+    template.scale.setScalar(2 / Math.max(size.x, size.y, size.z));
+    resolve(template);
+  }, undefined, reject);
+});
+
+function mountMilkyWayVisual(visual: THREE.Group, artist: ArtistWorld) {
+  milkyWayTemplate.then((template) => {
+    const instance = template.clone(true);
+    instance.traverse((obj) => {
+      const points = obj as THREE.Points<THREE.BufferGeometry, THREE.PointsMaterial>;
+      if (!points.isPoints) return;
+      const material = points.material.clone();
+      material.vertexColors = true;
+      material.color.copy(artist.color).lerp(new THREE.Color(0xffffff), 0.25);
+      material.size = 1;
+      material.sizeAttenuation = false;
+      material.transparent = true;
+      material.opacity = 0.035;
+      material.depthWrite = false;
+      material.blending = THREE.NormalBlending;
+      points.material = material;
+    });
+    visual.add(instance);
+  }).catch((error) => console.error('milky-way particle model failed:', error));
 }
+
 interface Planet {
   a: ArtistWorld;
   root: THREE.Group;
-  mesh: THREE.Mesh;
-  pu: PlanetU;
-  atmoU: { uColor: { value: THREE.Color }; uBeat: { value: number }; uBoost: { value: number } };
+  visual: THREE.Group;
+  galaxy: THREE.Group;
+  pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   r: number;
   spin: number;
   vinylRoot: THREE.Group | null;
@@ -267,66 +251,28 @@ for (const a of ARTISTS) {
   const root = new THREE.Group();
   root.position.set(Math.cos(th) * rad, y, Math.sin(th) * rad);
 
-  const pu: PlanetU = {
-    uMap: { value: null },
-    uHasMap: { value: 0 },
-    uColorA: { value: a.color.clone().lerp(new THREE.Color(0x05060e), 0.8) },
-    uColorB: { value: a.color.clone() },
-    uLightDir: { value: new THREE.Vector3(0, 1, 0) },
-    uTime: { value: 0 },
-    uBeat: { value: 0 },
-    uNear: { value: 1 },
-  };
-  const mat = new THREE.ShaderMaterial({ uniforms: pu as any, vertexShader: PLANET_VERT, fragmentShader: PLANET_FRAG });
-  const texPath = PLANET_TEXS[(i * 7 + 3) % PLANET_TEXS.length];
-  loadTex(texPath, (t) => {
-    t.colorSpace = THREE.SRGBColorSpace;
-    pu.uMap.value = t; pu.uHasMap.value = 1;
-  });
-  const mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), mat);
-  mesh.rotation.z = (Math.sin(i * 3.7) * 18 * Math.PI) / 180;
-  root.add(mesh);
-
-  const atmoU = { uColor: { value: a.color.clone() }, uBeat: { value: 0 }, uBoost: { value: 1 } };
-  const atmo = new THREE.Mesh(
-    new THREE.SphereGeometry(r * 1.12, 48, 32),
-    new THREE.ShaderMaterial({
-      uniforms: atmoU as any, vertexShader: ATMO_VERT, fragmentShader: ATMO_FRAG,
-      side: THREE.BackSide, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    })
+  const visual = new THREE.Group();
+  visual.quaternion.setFromUnitVectors(
+    new THREE.Vector3(0, 1, 0),
+    camera.position.clone().sub(root.position).normalize(),
   );
-  root.add(atmo);
+  root.add(visual);
+  const galaxy = new THREE.Group();
+  galaxy.scale.setScalar(r * 0.95);
+  galaxy.rotateY(i * 1.618);
+  visual.add(galaxy);
+  mountMilkyWayVisual(galaxy, a);
 
-  // 霓虹细环:1/2 行星佩戴,3-4 条发光细线,加法混合
-  if (i % 4 === 0 || i % 4 === 2) {
-    const cv = document.createElement('canvas'); cv.width = cv.height = 512;
-    const c = cv.getContext('2d')!;
-    const rings = i % 4 === 0 ? [0.64, 0.74, 0.86, 0.96] : [0.68, 0.82, 0.94];
-    rings.forEach((k, j) => {
-      c.beginPath(); c.arc(256, 256, k * 250, 0, Math.PI * 2);
-      c.strokeStyle = `rgba(255,255,255,${j % 2 ? 0.5 : 0.95})`;
-      c.lineWidth = j % 2 ? 6 : 3;
-      c.shadowColor = 'rgba(255,255,255,0.9)'; c.shadowBlur = 12;
-      c.stroke();
-    });
-    const rt = new THREE.CanvasTexture(cv);
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(r * 1.45, r * 2.45, 96),
-      new THREE.MeshBasicMaterial({
-        map: rt, transparent: true, side: THREE.DoubleSide, depthWrite: false,
-        blending: THREE.AdditiveBlending,
-        color: a.color.clone().lerp(new THREE.Color(0xffffff), 0.25), opacity: 0.85,
-      })
-    );
-    ring.rotation.x = Math.PI / 2 - 0.42 + Math.sin(i * 2.3) * 0.3;
-    ring.rotation.y = Math.sin(i) * 0.4;
-    root.add(ring);
-  }
+  // 粒子盘只负责显示；透明球仅用于鼠标命中，飞行/轨道继续沿用原 r。
+  const pickMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+  pickMaterial.colorWrite = false;
+  const pickMesh = new THREE.Mesh(new THREE.SphereGeometry(r * 1.38, 28, 18), pickMaterial);
+  pickMesh.userData.planetIdx = planets.length;
+  root.add(pickMesh);
 
-  (mesh as any).__planetIdx = planets.length;
   scene.add(root);
-  planets.push({ a, root, mesh, pu, atmoU, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
-  pickPlanets.push(mesh);
+  planets.push({ a, root, visual, galaxy, pickMesh, r, spin: 0.05 + (i % 5) * 0.014, vinylRoot: null, vinyls: [] });
+  pickPlanets.push(pickMesh);
 }
 
 /* ============ 黑胶唱片（歌曲卫星）—— 圆的、有厚度、会转 ============ */
@@ -428,75 +374,6 @@ async function ensureTrack(v: Vinyl) {
   }
   trackCache.set(v.node.id, { info, tex });
   v.coverState = 2;
-}
-
-/* ============ 焦点行星:glsl-atmosphere 物理散射大气(wwwtyro,公有领域) ============ */
-const SCATTER_VERT = `
-  varying vec3 vWorld;
-  void main() {
-    vWorld = (modelMatrix * vec4(position, 1.0)).xyz;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  }`;
-const SCATTER_FRAG = `
-  precision highp float;
-  varying vec3 vWorld;
-  uniform vec3 uCamPos; uniform vec3 uCenter; uniform vec3 uSunDir;
-  uniform float uRPlanet; uniform float uRAtmos;
-  uniform vec3 uKRlh; uniform float uKMie; uniform float uShRlh; uniform float uShMie;
-  uniform float uSunI;
-  ${ATMOSPHERE_GLSL}
-  void main() {
-    vec3 rd = normalize(vWorld - uCamPos);
-    vec3 r0 = uCamPos - uCenter;
-    vec3 col = atmosphere(rd, r0, uSunDir, uSunI, uRPlanet, uRAtmos, uKRlh, uKMie, uShRlh, uShMie, 0.758);
-    col = 1.0 - exp(-1.1 * col);
-    float a = clamp(max(col.r, max(col.g, col.b)) * 1.5, 0.0, 1.0);
-    gl_FragColor = vec4(col, a);
-  }`;
-
-let scatter: { mesh: THREE.Mesh; u: Record<string, { value: any }>; p: Planet } | null = null;
-function attachScatter(p: Planet) {
-  detachScatter();
-  const rA = p.r * 1.12;
-  const scale = 6371e3 / p.r; // 地球尺度参数按行星半径等比缩放
-  const kc = p.a.color;
-  const u = {
-    uCamPos: { value: new THREE.Vector3() },
-    uCenter: { value: p.root.position },
-    uSunDir: { value: new THREE.Vector3(0, 1, 0) },
-    uRPlanet: { value: p.r },
-    uRAtmos: { value: rA },
-    // 散射谱形:30% 地球蓝天 + 70% 歌手应援色
-    uKRlh: {
-      value: new THREE.Vector3(
-        (5.5e-6 * 0.3 + kc.r * 28e-6 * 0.7) * scale,
-        (13.0e-6 * 0.3 + kc.g * 28e-6 * 0.7) * scale,
-        (22.4e-6 * 0.3 + kc.b * 28e-6 * 0.7) * scale
-      ),
-    },
-    uKMie: { value: 21e-6 * scale },
-    uShRlh: { value: 24e3 / scale },
-    uShMie: { value: 3.6e3 / scale },
-    uSunI: { value: 20 },
-  };
-  const mesh = new THREE.Mesh(
-    new THREE.SphereGeometry(rA, 48, 32),
-    new THREE.ShaderMaterial({
-      uniforms: u as any, vertexShader: SCATTER_VERT, fragmentShader: SCATTER_FRAG,
-      side: THREE.BackSide, transparent: true, depthWrite: false,
-    })
-  );
-  mesh.position.copy(p.root.position);
-  mesh.renderOrder = 2;
-  scene.add(mesh);
-  scatter = { mesh, u, p };
-}
-function detachScatter() {
-  if (!scatter) return;
-  scene.remove(scatter.mesh);
-  scatter.mesh.geometry.dispose();
-  (scatter.mesh.material as THREE.Material).dispose();
-  scatter = null;
 }
 
 /* ============ 星尘氛围带:应援色大辉光,给宇宙上底色 ============ */
@@ -687,9 +564,9 @@ const MODE_LABEL: Record<Mode, string> = {
   orbit: '轨道 ORBIT', landing: '降落 PLANETFALL', surface: '地表 SURFACE', takeoff: '起飞 ASCENT',
 };
 const HINTS: Partial<Record<Mode, string>> = {
-  cruise: '拖拽 环视 · WASD 手动驾驶 · V 视角 · 点行星 入轨 · P 暂停 · M 静音',
-  orbit: '拖拽 环视 · 点唱片 降落播放 · 点行星 跃迁 · WASD/ESC 返航 · M 静音',
-  surface: '拖拽 环视 · N 下一着陆点 · 点行星 跃迁 · WASD/ESC 起飞 · P 暂停 · M 静音',
+  cruise: '拖拽 环视 · WASD 手动驾驶 · V 视角 · 点星系 入轨 · P 暂停 · M 静音',
+  orbit: '拖拽 环视 · 点唱片 降落播放 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
+  surface: '拖拽 环视 · N 下一着陆点 · 点星系 跃迁 · WASD/ESC 起飞 · P 暂停 · M 静音',
 };
 function setMode(m: Mode) {
   MODE = m;
@@ -698,7 +575,7 @@ function setMode(m: Mode) {
   el.pcard.classList.toggle('show', m === 'orbit' || m === 'surface');
   const pk = el.pcard.querySelector('.k');
   if (pk) pk.textContent = m === 'surface' ? 'SURFACE · 已着陆' : 'ORBIT · 已入轨';
-  // reticle 在 cruise/orbit/surface 三个模式都可存活(行星拾取)
+  // reticle 在 cruise/orbit/surface 三个模式都可存活(星系拾取)
   if (m !== 'cruise' && m !== 'orbit' && m !== 'surface') { el.reticle.classList.remove('show'); hoverPlanet = null; }
   if (m !== 'orbit') { el.vinylTag.classList.remove('show'); hoverVinyl = null; }
 }
@@ -786,6 +663,9 @@ let cruiseTheta = 0.2;
 const CRUISE_R = 2550, CRUISE_Y = 300;
 const camLook = new THREE.Vector3(0, 0, 0);
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3(), tmpL = new THREE.Vector3();
+const galaxyFaceDir = new THREE.Vector3();
+const galaxyFaceQuat = new THREE.Quaternion();
+const galaxyNormal = new THREE.Vector3(0, 1, 0);
 
 function cruisePos(th: number, out: THREE.Vector3) {
   return out.set(Math.cos(th) * CRUISE_R, CRUISE_Y + Math.sin(th * 2.3) * 90, Math.sin(th) * CRUISE_R);
@@ -796,14 +676,14 @@ function cruisePos(th: number, out: THREE.Vector3) {
  *  launch — 学 galaxy.spotifytrack.net 的 fly-to,核心是「先拉远再飞入」:
  *    P1 = 路径中点向星域外侧推出一段【常数主导】的巨大距离
  *    (参考站是 dist*0.4+300000,常数远大于典型航程本身)——
- *    起手不是冲向目标,而是猛地向后拉出高空,整个行星带缩成全景,
+ *    起手不是冲向目标,而是猛地向后拉出高空,整个星系带缩成全景,
  *    到达弧顶后再折返俯冲扎向目标,拉出的空间距离就是戏剧张力;
  *    P2 = 沿逼近方向越过终点(len*0.05+常数) → 飞过头刹车再摆回,甩尾入轨;
  *    时间线性推进(ease:'none'),快慢全部由控制点几何决定:
  *    |P1-P0| 巨长 → 瞬间点火急退,|P3-P2| 短 → 漫长优雅的减速滑入;
  *    视线与路径解耦,每帧指数收敛甩向目标(参考站 0.937/帧@60fps),
  *    后拉段死死盯住目标 → 目标在画面里急速缩小,俯冲段再迎面放大。 */
-const PULL_BACK = 6200; // 后拉常数:主导 P1 外推量,弧顶拉到 ~5000 高空俯瞰整个行星带,近侧目标可拉到起始距离近 3 倍
+const PULL_BACK = 6200; // 后拉常数:主导 P1 外推量,弧顶拉到 ~5000 高空俯瞰整个星系带,近侧目标可拉到起始距离近 3 倍
 interface Flight {
   curve: THREE.CubicBezierCurve3; look0: THREE.Vector3; look1: THREE.Vector3; t: number; roll: number;
   mode: 'glide' | 'launch'; end: THREE.Vector3; tCrop: number;
@@ -901,12 +781,11 @@ function disposeVinyls(p: Planet) {
 /* ============ 交互:入轨 / 降落 / 起飞 ============ */
 let orbitAng = 0;
 
-/** 收养一颗行星:焦点切换 + 唱片/散射/泊船装配 + HUD 填充(入轨与跃迁共用) */
+/** 收养一座星系:焦点切换 + 唱片/泊船装配 + HUD 填充(入轨与跃迁共用) */
 function adoptPlanet(p: Planet) {
   focus = p;
   setAccent(p.a.css);
   buildVinyls(p);
-  attachScatter(p);
   el.pcName.textContent = p.a.name;
   el.pcCn.textContent = p.a.cn || '—';
   el.pcSongs.textContent = String(p.vinyls.length);
@@ -936,7 +815,7 @@ function approachPlanet(p: Planet) {
 
 /* ============ 轨道→轨道直航(超空间隧道方案暂下线,tunnel.ts 保留待后期再调) ============ */
 
-/** 在 A 歌手轨道上点远处行星:旧星收尾+新星装配,一段 launch 贝塞尔直飞入轨 */
+/** 在 A 歌手轨道上点远处星系:旧星收尾+新星装配,一段 launch 贝塞尔直飞入轨 */
 function hyperjumpTo(p: Planet) {
   if (p === focus) return;
   if (MODE === 'approach' || MODE === 'takeoff' || MODE === 'landing') return;
@@ -974,7 +853,6 @@ function returnToCruise() {
     to, look: cruisePos(cruiseTheta + 0.5, tmpV2.clone()).multiplyScalar(0.4), dur: 2.2, warp: 0.4,
     onDone: () => {
       disposeVinyls(p);
-      detachScatter();
       focus = null;
       setAccent('#ffb46b');
       setMode('cruise');
@@ -1341,10 +1219,10 @@ function landOnVinyl(v: Vinyl) {
   if (MODE !== 'orbit' || !focus) return;
   const p = focus;
   setMode('landing');
-  say(`着陆点锁定:<b>${v.node.name}</b> · 进入大气层`);
+  say(`着陆点锁定:<b>${v.node.name}</b> · 穿越星云核心`);
   ensureTrack(v);
 
-  // 着陆相机位:从行星中心指向唱片轨道位的方向,落在表面上空
+  // 着陆相机位:从星系中心指向唱片轨道位的方向,落在表面上空
   const vWorld = v.group.getWorldPosition(tmpV.clone());
   const n = tmpV2.subVectors(vWorld, p.root.position).normalize();
   const surf = p.root.position.clone().addScaledVector(n, p.r * 1.22);
@@ -1354,7 +1232,7 @@ function landOnVinyl(v: Vinyl) {
   const look = surf.clone().addScaledVector(tangent, p.r * 1.3).addScaledVector(n, -p.r * 0.42);
 
   audio.entryNoise(2.1);
-  // 大气过场
+  // 星云穿越过场
   gsap.to(el.entry.style, { opacity: 0.55, duration: 1.15, ease: 'power2.in', delay: 0.5 });
   gsap.to(el.entry.style, { opacity: 0, duration: 0.8, ease: 'power2.out', delay: 2.05 });
   gsap.to(camera, { fov: 74, duration: 1.4, ease: 'power2.in', onUpdate: () => camera.updateProjectionMatrix() });
@@ -1477,10 +1355,10 @@ function pick() {
   raycaster.setFromCamera(mouse, camera);
   if (MODE === 'cruise') {
     const hits = raycaster.intersectObjects(pickPlanets, false);
-    hoverPlanet = hits.length ? planets[(hits[0].object as any).__planetIdx] : null;
+    hoverPlanet = hits.length ? planets[hits[0].object.userData.planetIdx] : null;
     document.body.style.cursor = hoverPlanet ? 'pointer' : 'default';
   } else if ((MODE === 'orbit' || MODE === 'surface') && focus) {
-    // 唱片优先(orbit);没中再测其他行星(跃迁目标)
+    // 唱片优先(orbit);没中再测其他星系(跃迁目标)
     hoverVinyl = null;
     hoverPlanet = null;
     if (MODE === 'orbit') {
@@ -1489,8 +1367,8 @@ function pick() {
       hoverVinyl = hits.length ? ((hits[0].object as any).__vinyl as Vinyl) : null;
     }
     if (!hoverVinyl) {
-      const ph = raycaster.intersectObjects(pickPlanets.filter((m) => m !== focus!.mesh), false);
-      hoverPlanet = ph.length ? planets[(ph[0].object as any).__planetIdx] : null;
+      const ph = raycaster.intersectObjects(pickPlanets.filter((m) => m !== focus!.pickMesh), false);
+      hoverPlanet = ph.length ? planets[ph[0].object.userData.planetIdx] : null;
     }
     document.body.style.cursor = hoverVinyl || hoverPlanet ? 'pointer' : 'default';
     if (hoverVinyl) ensureTrack(hoverVinyl);
@@ -1706,18 +1584,16 @@ function tick() {
     camera.rotateZ((Math.random() - 0.5) * shake * 0.02);
   }
 
-  // ---- 行星自转/大气呼吸(近距离时大气衰减,防过曝盖纹理) ----
+  // ---- 粒子星系自转/呼吸 ----
   for (const p of planets) {
-    p.mesh.rotation.y += dt * p.spin;
-    const isF = p === focus;
-    p.atmoU.uBeat.value += (((isF ? bass : bass * 0.25)) - p.atmoU.uBeat.value) * (1 - Math.exp(-dt * 8));
-    const dNorm = camera.position.distanceTo(p.root.position) / p.r;
-    p.atmoU.uBoost.value = THREE.MathUtils.clamp((dNorm - 1.5) / 2.6, 0.18, 1);
-    p.pu.uTime.value = t;
-    p.pu.uBeat.value = p.atmoU.uBeat.value;
-    p.pu.uNear.value = p.atmoU.uBoost.value;
-    tmpL.copy(keyLight.position).sub(p.root.position).normalize().transformDirection(camera.matrixWorldInverse);
-    p.pu.uLightDir.value.copy(tmpL);
+    galaxyFaceDir.copy(camera.position).sub(p.root.position).normalize();
+    galaxyFaceQuat.setFromUnitVectors(galaxyNormal, galaxyFaceDir);
+    p.visual.quaternion.slerp(galaxyFaceQuat, 1 - Math.exp(-dt * 8));
+    p.galaxy.rotateY(dt * p.spin);
+    const pulse = bass * (p === focus ? 0.035 : 0.012);
+    const targetScale = p.r * 0.95 * (1 + pulse);
+    const scale = THREE.MathUtils.lerp(p.galaxy.scale.x, targetScale, 1 - Math.exp(-dt * 5));
+    p.galaxy.scale.setScalar(scale);
   }
 
   // ---- 唱片轨道 ----
@@ -1746,12 +1622,12 @@ function tick() {
     keyLight.position.copy(camera.position).addScaledVector(tmpV, 240).addScaledVector(camera.up, 520);
     keyLight.target.position.copy(camera.position).addScaledVector(tmpV, 300).addScaledVector(camera.up, -160);
   } else {
-    // 侧光:让行星有明暗两半,霓虹晨昏线竖切正面
+    // 侧光:照亮巡航中的主机和僚机
     keyLight.position.copy(camera.position).addScaledVector(tmpV2, 1050).addScaledVector(camera.up, 340).addScaledVector(tmpV, 300);
     keyLight.target.position.copy(camera.position).addScaledVector(tmpV, 800);
   }
 
-  // ---- 火焰三档:静止/漫游 弱 · WASD 中 · Shift/点星球飞行 全力 ----
+  // ---- 火焰三档:静止/漫游 弱 · WASD 中 · Shift/点星系飞行 全力 ----
   const wasdActive = (COMPARE || (drive.manual && MODE === 'cruise')) &&
     ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => drive.keys.has(k));
   const fullBurn = !!flight || (wasdActive && drive.boost);
@@ -1841,13 +1717,6 @@ function tick() {
     for (const fwp of wg.fireWraps) fwp.scale.setScalar(fwp.scale.x + (wSize - fwp.scale.x) * k6);
   });
 
-  // ---- 焦点行星散射大气 uniforms ----
-  if (scatter) {
-    scatter.u.uCamPos.value.copy(camera.position);
-    tmpL.copy(keyLight.position).sub(scatter.p.root.position).normalize();
-    scatter.u.uSunDir.value.copy(tmpL);
-  }
-
   // ---- 天幕/太阳 ----
   skyMesh.rotation.y = t * 0.0032;
   starU.uTime.value = t;
@@ -1897,7 +1766,7 @@ el.ignite.addEventListener('click', () => {
   el.ignite.classList.add('off');
   setMode('cruise');
   say('引擎点火 · 舰载 AI 上线');
-  setTimeout(() => say(`长程雷达就绪 · 扫描到 <b>${ARTISTS.length}</b> 颗行星信号`), 1400);
+  setTimeout(() => say(`长程雷达就绪 · 扫描到 <b>${ARTISTS.length}</b> 座歌手星系`), 1400);
   setTimeout(() => say('午夜频段清澈 · 挑一颗顺眼的,点它'), 3200);
 });
 
@@ -1914,7 +1783,7 @@ tick();
 if (COMPARE) setTimeout(() => el.ignite.click(), 900);
 
 /* ============ 调试句柄 ============ */
-(window as any).__proto = {
+(window as any).__planetfall = {
   scene, camera, gsap, audio, planets, warpU,
   get mode() { return MODE; },
   get skyLoaded() { return skyLoaded; },

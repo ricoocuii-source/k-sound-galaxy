@@ -1,0 +1,11 @@
+Model Information:
+* title:	The Milky-way  galaxy
+* source:	https://sketchfab.com/3d-models/the-milky-way-galaxy-90d1077e6e65406784cf377ab4bd1d96
+* author:	balongonick (https://sketchfab.com/balongonick)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "The Milky-way  galaxy" (https://sketchfab.com/3d-models/the-milky-way-galaxy-90d1077e6e65406784cf377ab4bd1d96) by balongonick (https://sketchfab.com/balongonick) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
