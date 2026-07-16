@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Local source archives / experiments; production uses the extracted runtime assets.
+black_hole/
+black_hole.zip
+free_tunnel_wormhole_space_fly_effect_loop.zip
+galaxy.zip
+particle-fusion.html
+star_fighter_low-poly.zip
+the_milky-way__galaxy.zip
