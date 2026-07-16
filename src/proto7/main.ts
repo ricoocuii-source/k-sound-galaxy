@@ -2097,6 +2097,7 @@ function tick() {
   if ((MODE === 'cruise' || MODE === 'orbit' || MODE === 'mirror') && hoverPlanet) {
     el.retName.textContent = hoverPlanet.a.name;
     el.retSub.textContent = MODE === 'cruise' ? '入轨' : '切换歌手';
+    el.reticle.style.setProperty('--reticle-acc', hoverPlanet.a.css);
     const ok = projectTo(el.reticle, hoverPlanet.root.position, 26, -20);
     el.reticle.classList.toggle('show', ok);
     el.reticle.setAttribute('aria-hidden', String(!ok));

@@ -100,14 +100,15 @@
       .reticle {
         left: 0; top: 0; padding: 10px 16px 10px 14px; pointer-events: none;
         opacity: 0; transition: opacity 0.25s;
-        --aug-border-all: 1px; --aug-border-bg: var(--acc);
+        --reticle-acc: var(--acc);
+        --aug-border-all: 1px; --aug-border-bg: var(--reticle-acc);
         --aug-tl: 10px; --aug-tr: 10px; --aug-bl: 10px; --aug-br: 10px;
-        background: color-mix(in srgb, var(--acc) 7%, rgba(4,6,10,0.35));
+        background: color-mix(in srgb, var(--reticle-acc) 7%, rgba(4,6,10,0.35));
         will-change: transform;
       }
       .reticle.show { opacity: 1; }
       .reticle b { display: block; font-family: var(--display); font-size: var(--type-title); font-weight: 600; letter-spacing: var(--track-body); color: var(--ink); }
-      .reticle span { display: block; margin-top: 3px; font-size: var(--type-micro); letter-spacing: var(--track-label); color: var(--acc); }
+      .reticle span { display: block; margin-top: 3px; font-size: var(--type-micro); letter-spacing: var(--track-label); color: var(--reticle-acc); }
 
       /* ---------- 悬停唱片标签 ---------- */
       .vinylTag {
