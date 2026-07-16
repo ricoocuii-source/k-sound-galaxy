@@ -134,6 +134,17 @@
         opacity: 0; transition: opacity 0.2s ease; will-change: transform;
       }
 
+      /* ---------- 歌手星云常驻名称（比歌曲标题稍大） ---------- */
+      .artistGalaxyLabel {
+        position: fixed; left: 0; top: 0; z-index: 17; width: 176px;
+        margin-left: -88px; pointer-events: none; user-select: none;
+        color: rgba(237, 231, 219, 0.94); text-align: center;
+        font-family: var(--sans); font-size: 13px; font-weight: 600;
+        line-height: 1.25; letter-spacing: var(--track-body);
+        text-shadow: 0 1px 3px #000, 0 0 8px rgba(0,0,0,0.95), 0 0 16px rgba(0,0,0,0.82);
+        opacity: 0; transition: opacity 0.25s ease; will-change: transform;
+      }
+
       /* ---------- 轨道态：星系卡 ---------- */
       .pcard {
         left: 30px; top: 50%; transform: translateY(-50%) translateX(-16px); width: 246px;
@@ -249,7 +260,7 @@
 
     <div class="ui reticle" id="reticle" aria-hidden="true" data-augmented-ui="tl-clip tr-clip bl-clip br-clip border">
       <b id="retName">—</b>
-      <span id="retSub">入轨</span>
+      <span id="retSub">点击入轨</span>
     </div>
 
     <div class="ui vinylTag" id="vinylTag" aria-hidden="true" data-augmented-ui="tl-clip br-clip border">

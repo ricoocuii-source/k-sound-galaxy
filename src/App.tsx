@@ -11,6 +11,7 @@ import MusicPlayer from './components/MusicPlayer';
 import InsightPanel from './components/InsightPanel';
 import SearchDropdown from './components/SearchDropdown';
 import { fetchTrackInfo, TrackInfo } from './engine/itunes';
+import { EngineMode } from './engine/GalaxyEngine';
 import { RotateCcw } from 'lucide-react';
 
 export interface NavRequest {
@@ -26,6 +27,9 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [resetNonce, setResetNonce] = useState(0);
   const [navRequest, setNavRequest] = useState<NavRequest | null>(null);
+  // 'line' is the poster landing — chrome (header/player) stays hidden there
+  const [engineMode, setEngineMode] = useState<EngineMode>('line');
+  const isLanding = engineMode === 'line';
 
   const [trackInfo, setTrackInfo] = useState<TrackInfo | null>(null);
   const [isLoadingTrack, setIsLoadingTrack] = useState(false);
@@ -93,14 +97,22 @@ export default function App() {
     ? selectedNode
     : (selectedNodeB?.type === 'song' || selectedNodeB?.type === 'artist' ? selectedNodeB : null);
 
+
   return (
     <div className="relative w-screen h-screen flex flex-col justify-between overflow-hidden bg-[#05060a] font-sans text-[#e8e0d2]">
 
-      {/* 1. TOP NAVIGATION — transparent, floats over the canvas */}
-      <header className="absolute top-0 left-0 right-0 z-30 px-6 md:px-10 py-5 flex items-center justify-between gap-4 pointer-events-none bg-gradient-to-b from-[#05060a]/85 via-[#05060a]/40 to-transparent">
+      {/* 1. TOP NAVIGATION — transparent, floats over the canvas.
+          On the poster landing it retreats entirely; the vertical
+          signature inside the canvas carries the brand instead.
+          CSS transition (not JS animation) so hidden tabs still settle. */}
+      <header
+        className={`absolute top-0 left-0 right-0 z-30 px-6 md:px-10 py-5 flex items-center justify-between gap-4 pointer-events-none bg-gradient-to-b from-[#05060a]/85 via-[#05060a]/40 to-transparent transition-all duration-[900ms] ease-out ${
+          isLanding ? 'opacity-0 -translate-y-4' : 'opacity-100 translate-y-0 delay-500'
+        }`}
+      >
 
         {/* Brand */}
-        <div className="flex items-center gap-3 pointer-events-auto">
+        <div className="flex items-center gap-3" style={{ pointerEvents: isLanding ? 'none' : 'auto' }}>
           <div className="w-6 h-6 rounded-full border border-[#e8e0d2]/50 flex items-center justify-center">
             <span className="w-1 h-1 rounded-full bg-[#e8e0d2]/80" />
           </div>
@@ -110,7 +122,7 @@ export default function App() {
         </div>
 
         {/* Search + Reset */}
-        <div className="flex items-center gap-3 pointer-events-auto">
+        <div className="flex items-center gap-3" style={{ pointerEvents: isLanding ? 'none' : 'auto' }}>
           <SearchDropdown
             value={searchQuery}
             onChange={setSearchQuery}
@@ -138,6 +150,7 @@ export default function App() {
           navRequest={navRequest}
           onSelectNode={handleSelectNode}
           onCompareNodes={handleCompareNodes}
+          onModeChange={setEngineMode}
           searchQuery={searchQuery}
         />
 
@@ -157,8 +170,12 @@ export default function App() {
         </AnimatePresence>
       </main>
 
-      {/* 3. BOTTOM PLAYER */}
-      <footer className="w-full relative z-40">
+      {/* 3. BOTTOM PLAYER — slides away on the poster landing */}
+      <footer
+        className={`w-full relative z-40 transition-transform duration-[900ms] ease-out ${
+          isLanding ? 'translate-y-[112%]' : 'translate-y-0 delay-500'
+        }`}
+      >
         <MusicPlayer
           activeSong={activeSong}
           isPlaying={isPlaying}

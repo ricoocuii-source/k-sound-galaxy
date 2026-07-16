@@ -45,7 +45,7 @@ export interface EngineCallbacks {
   onModeChange: (mode: EngineMode) => void;
 }
 
-export type EngineMode = 'overview' | 'artist' | 'song';
+export type EngineMode = 'line' | 'overview' | 'artist' | 'song';
 
 interface NebulaEntry {
   def: ArtistDef;
@@ -61,6 +61,7 @@ interface NebulaEntry {
   mistMat: THREE.ShaderMaterial;
   core: THREE.Sprite;
   veil: THREE.Sprite;
+  coreAspect: number;      // elliptical bulge height/width ratio (per artist)
   coreDim: number;         // eased multiplier; drops while the mirror is open
   coreDimTarget: number;
   hit: THREE.Mesh;
@@ -117,25 +118,12 @@ export const NEBULA_VERT = /* glsl */ `
     float theta = aTheta + uSpinTime * w;
     float r = aRadius * (1.0 + uFocus * 0.32);
     vec3 p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
-    vec4 probeMv = modelViewMatrix * vec4(p, 1.0);
-    float farDetail = smoothstep(420.0, 950.0, -probeMv.z);
-    // Sub-pixel spiral lanes alias into fingerprint rings. At long range only,
-    // stable per-particle offsets preserve the near view's irregular breadth.
-    theta += farDetail * (sin(aPhase * 13.71) * 0.12 + sin(aPhase * 31.13) * 0.04);
-    r *= 1.0 + farDetail * sin(aPhase * 7.37) * 0.05;
-    p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
     float att = 400.0 / max(1.0, -mv.z);
-    // Preserve the same broken, star-rich body at cruise distance instead of
-    // collapsing the cloud into a few mathematically perfect spiral lines.
-    float farSize = mix(1.0, 1.08, farDetail);
-    gl_PointSize = clamp(aSize * att * farSize * uPixelRatio * (1.0 + uFocus * 0.35), 0.62, 34.0);
+    gl_PointSize = clamp(aSize * att * uPixelRatio * (1.0 + uFocus * 0.35), 0.5, 34.0);
     vColor = aColor;
-    // At long range, deterministically thin the mathematical ridge continuity
-    // while keeping individual star points crisp and stable.
-    float farScatter = smoothstep(0.16, 0.88, sin(aPhase * 17.31) * 0.5 + 0.5);
-    vBright = aBright * mix(1.0, 0.42 + 0.82 * farScatter, farDetail);
+    vBright = aBright;
     vTwinkle = 0.8 + 0.2 * sin(uSpinTime * 2.6 + aPhase);
   }
 `;
@@ -184,20 +172,14 @@ export const SMOKE_VERT = /* glsl */ `
     float theta = aTheta + uSpinTime * w;
     float r = aRadius * (1.0 + uFocus * 0.32);
     vec3 p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
-    vec4 probeMv = modelViewMatrix * vec4(p, 1.0);
-    float farDetail = smoothstep(420.0, 950.0, -probeMv.z);
-    theta += farDetail * (sin(aPhase * 11.83) * 0.18 + sin(aPhase * 23.17) * 0.06);
-    r *= 1.0 + farDetail * sin(aPhase * 5.91) * 0.07;
-    p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
     float att = 400.0 / max(1.0, -mv.z);
-    float farSize = mix(1.0, 2.15, farDetail);
-    gl_PointSize = clamp(aSize * att * farSize * uPixelRatio * (1.0 + uFocus * 0.3), 2.0, 460.0);
+    gl_PointSize = clamp(aSize * att * uPixelRatio * (1.0 + uFocus * 0.3), 2.0, 460.0);
     vColor = aColor;
-    // Retain the irregular atmospheric body at cruise distance. The texture,
-    // color and blending stay unchanged; only distance LOD stops erasing it.
-    float distFade = mix(1.0, 0.82, farDetail);
+    // mist is a close-up detail: distant galaxies read as crisp stars, so the
+    // additive haze fades with camera distance and the void stays black
+    float distFade = mix(1.0, 0.1, smoothstep(420.0, 950.0, -mv.z));
     vAlpha = aAlpha * distFade * (0.85 + 0.15 * sin(uSpinTime * 0.7 + aPhase * 9.0));
     vRot = aPhase * 6.2831 + uSpinTime * aRotSpeed;
     vVariant = aVariant;
@@ -361,6 +343,7 @@ const STARS_VERT = /* glsl */ `
 `;
 
 const STARS_FRAG = /* glsl */ `
+  uniform float uPulse; // bass-driven breath: the whole sky listens
   varying vec3 vColor;
   varying float vTwinkle;
   void main() {
@@ -368,13 +351,135 @@ const STARS_FRAG = /* glsl */ `
     float d2 = dot(c, c);
     float a = exp(-d2 * 16.0) - 0.006;
     if (a <= 0.0) discard;
-    gl_FragColor = vec4(vColor, a * vTwinkle * 0.8);
+    gl_FragColor = vec4(vColor, a * vTwinkle * (0.78 + uPulse * 0.45));
   }
 `;
 
 // ---------------------------------------------------------------- helpers
 
 /** Exponential-falloff glow — no visible edge at any scale. */
+/** Meteor streak — hot head on the right, exponential tail trailing left. */
+function makeMeteorTexture(): THREE.Texture {
+  const W = 256, H = 32;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(W, H);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const u = x / W;           // 0 tail … 1 head
+      const dy = (y - H / 2) / (H / 2);
+      // tail thins and fades away from the head
+      const width = 0.16 + (1 - u) * 0.1;
+      const lateral = Math.exp(-(dy * dy) / (width * width));
+      const along = Math.exp(-(1 - u) * 5.5);
+      const head = Math.exp(-(((u - 0.94) * 14) ** 2 + dy * dy * 3) * 2.2);
+      const a = Math.min(1, along * lateral + head * 1.2);
+      const i = (y * W + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 250;
+      img.data[i + 2] = 238;
+      img.data[i + 3] = Math.min(255, a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Tiny remote spiral — an unmistakable "another galaxy out there" silhouette. */
+function makeMiniGalaxyTexture(): THREE.Texture {
+  const SIZE = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = SIZE;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(SIZE, SIZE);
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const dx = (x - SIZE / 2) / (SIZE / 2);
+      const dy = (y - SIZE / 2) / (SIZE / 2);
+      // flattened disk halo + hot core
+      const er = Math.hypot(dx, dy / 0.42);
+      let a = Math.exp(-er * er * 3.2) * 0.5 + Math.exp(-er * er * 22) * 0.9;
+      // two short trailing arm arcs
+      const ang = Math.atan2(dy / 0.42, dx);
+      const rad = er;
+      for (const ph of [0, Math.PI]) {
+        const target = ph + rad * 2.6;
+        let d = Math.atan2(Math.sin(ang - target), Math.cos(ang - target));
+        a += Math.exp(-(d * d) * 7) * Math.exp(-((rad - 0.55) * (rad - 0.55)) * 9) * 0.4;
+      }
+      const i = (y * SIZE + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 248;
+      img.data[i + 2] = 235;
+      img.data[i + 3] = Math.min(255, a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Irregular elliptical nebula core — replaces the perfect radial glow whose
+ * additive stack + bloom read as a hard "diamond". Elliptical base, soft
+ * asymmetric lobes, and an fbm-ragged rim: a real galaxy bulge, never a shape.
+ */
+function makeCoreNebulaTexture(): THREE.Texture {
+  const SIZE = 256;
+  const c = document.createElement('canvas');
+  c.width = c.height = SIZE;
+  const ctx = c.getContext('2d')!;
+  const img = ctx.createImageData(SIZE, SIZE);
+
+  const hash = (x: number, y: number) => {
+    const s = Math.sin(x * 127.1 + y * 311.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  const vnoise = (x: number, y: number) => {
+    const xi = Math.floor(x), yi = Math.floor(y);
+    const xf = x - xi, yf = y - yi;
+    const u = xf * xf * (3 - 2 * xf), v = yf * yf * (3 - 2 * yf);
+    return (
+      hash(xi, yi) * (1 - u) * (1 - v) +
+      hash(xi + 1, yi) * u * (1 - v) +
+      hash(xi, yi + 1) * (1 - u) * v +
+      hash(xi + 1, yi + 1) * u * v
+    );
+  };
+  const fbm = (x: number, y: number) =>
+    0.65 * vnoise(x, y) + 0.35 * vnoise(x * 2.3 + 5.2, y * 2.3 + 1.7);
+
+  for (let y = 0; y < SIZE; y++) {
+    for (let x = 0; x < SIZE; x++) {
+      const dx = (x - SIZE / 2) / (SIZE / 2);
+      const dy = (y - SIZE / 2) / (SIZE / 2);
+      const ang = Math.atan2(dy, dx);
+      // elliptical base radius (x-elongated along the disk)…
+      let er = Math.hypot(dx, dy / 0.64);
+      // …softly asymmetric lobes so the silhouette never feels geometric…
+      er *= 1 + 0.14 * Math.sin(ang * 2 + 0.9) + 0.09 * Math.sin(ang * 3 + 2.1);
+      // …and a feathered, noise-ragged rim
+      const n = fbm(Math.cos(ang) * 1.6 + 3.1, Math.sin(ang) * 1.6 + 4.7);
+      er *= 1 + (n - 0.5) * 0.5;
+      const a = Math.exp(-er * er * 14) * 0.85 + Math.exp(-er * er * 2.8) * 0.2;
+      const i = (y * SIZE + x) * 4;
+      img.data[i] = 255;
+      img.data[i + 1] = 255;
+      img.data[i + 2] = 255;
+      img.data[i + 3] = Math.min(255, a * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
 export function makeGlowTexture(): THREE.Texture {
   const SIZE = 256;
   const c = document.createElement('canvas');
@@ -505,13 +610,17 @@ export function makeStarSpikeTexture(): THREE.Texture {
       const d2 = dx * dx + dy * dy;
       // core
       let a = Math.exp(-d2 * 42) * 1.0 + Math.exp(-d2 * 7) * 0.12;
-      // vertical + horizontal spikes (sharp gaussian across, long falloff along)
-      const spikeV = Math.exp(-(dx * dx) * 900) * Math.exp(-Math.abs(dy) * 4.2) * 0.9;
-      const spikeH = Math.exp(-(dy * dy) * 900) * Math.exp(-Math.abs(dx) * 4.2) * 0.9;
-      // faint 45° secondary spikes
+      // vertical + horizontal spikes — the crosswise gaussian tightens with
+      // distance from the core, so each ray tapers to a needle point instead
+      // of ending as an equal-width bar (which read as a rectangular block)
+      const taperV = 900 * (1 + Math.abs(dy) * 9);
+      const taperH = 900 * (1 + Math.abs(dx) * 9);
+      const spikeV = Math.exp(-(dx * dx) * taperV) * Math.exp(-Math.abs(dy) * 4.0) * 0.9;
+      const spikeH = Math.exp(-(dy * dy) * taperH) * Math.exp(-Math.abs(dx) * 4.0) * 0.9;
+      // faint 45° secondary spikes, same needle taper
       const u = (dx + dy) * 0.7071, v = (dx - dy) * 0.7071;
-      const spikeD1 = Math.exp(-(u * u) * 1400) * Math.exp(-Math.abs(v) * 7.0) * 0.35;
-      const spikeD2 = Math.exp(-(v * v) * 1400) * Math.exp(-Math.abs(u) * 7.0) * 0.35;
+      const spikeD1 = Math.exp(-(u * u) * 1400 * (1 + Math.abs(v) * 9)) * Math.exp(-Math.abs(v) * 6.6) * 0.35;
+      const spikeD2 = Math.exp(-(v * v) * 1400 * (1 + Math.abs(u) * 9)) * Math.exp(-Math.abs(u) * 6.6) * 0.35;
       a += spikeV + spikeH + spikeD1 + spikeD2;
       const i = (y * SIZE + x) * 4;
       img.data[i] = 255;
@@ -528,6 +637,14 @@ export function makeStarSpikeTexture(): THREE.Texture {
 
 const OVERVIEW_RADIUS = 1360; // frames all three depth bands of the tiered layout
 const ARTIST_RADIUS = 250;
+
+// "The Line" landing view — the galaxy seen edge-on as a single horizontal
+// sequence (VOYAGER-poster composition): artists as distant points on a
+// 1px orbit line, an eclipse silhouette at the center, 95% void.
+const LINE_RADIUS = 3200;   // long-lens camera distance
+const LINE_FOV = 30;        // telephoto compression, flattens perspective
+const LINE_SPAN = 1150;     // half-width of the artist sequence
+const LINE_GAP = 190;       // clearance around the central eclipse
 
 // Cinematic hierarchy: legendary acts anchor the bright foreground, the mid
 // guard fills the middle field, rookies drift smaller in the deep background.
@@ -566,7 +683,6 @@ export class GalaxyEngine {
   private timer = new THREE.Timer();
   private elapsed = 0;
   private rafId = 0;
-  private bgTimeoutId = 0;
 
   // camera rig
   private lookTarget = new THREE.Vector3(0, 0, 0);
@@ -591,11 +707,28 @@ export class GalaxyEngine {
   private compareLink: THREE.Mesh | null = null;
   private mirror!: TimeMirror;
   private glowTex!: THREE.Texture;
+  private coreTex!: THREE.Texture;
   private spikeTex!: THREE.Texture;
   private smokeTex!: THREE.Texture;
 
+  // ambient theatre: meteors, anchor stars, the breathing sky
+  private meteor!: THREE.Sprite;
+  private meteorBusy = false;
+  private meteorNextAt = 9; // first one arrives shortly after the landing
+  private anchorStars: { sprite: THREE.Sprite; phase: number; base: number }[] = [];
+  private starPulseMat!: THREE.ShaderMaterial;
+
+  // "The Line" landing scenography
+  private eclipse!: THREE.Group;
+  private eclipseDisc!: THREE.Mesh;      // black silhouette (occluder, not a light)
+  private eclipseHaloWarm!: THREE.Sprite;
+  private eclipseHaloCool!: THREE.Sprite;
+  private eclipseKernel!: THREE.Sprite;
+  private orbitLine!: THREE.Mesh;        // the 1px line the artists sit on
+  private lineLayout: Record<string, THREE.Vector3> | null = null;
+
   // state
-  public mode: EngineMode = 'overview';
+  public mode: EngineMode = 'line';
   private focusedArtistId: string | null = null;
   private selectedSongId: string | null = null;
   private selectedSongIdB: string | null = null;
@@ -621,20 +754,35 @@ export class GalaxyEngine {
     this.initWorld();
     this.bindEvents();
 
-    // Cinematic arrival: drift in from deep space toward the galaxy
-    this.sph.radius = 2350;
-    this.sph.phi = 0.62;
-    this.sph.theta = this.sphTarget.theta - 0.5;
-    this.applySpherical();
-    this.flying = true;
-    gsap.to(this.sph, {
-      radius: this.sphTarget.radius,
-      phi: this.sphTarget.phi,
-      theta: this.sphTarget.theta,
-      duration: 3.4,
-      ease: 'power3.out',
-      onUpdate: () => this.applySpherical(),
-      onComplete: () => { this.flying = false; },
+    // The Line landing: static telephoto camera facing the sequence head-on.
+    // Arrival is scenography, not camera motion — the line draws itself,
+    // the artists ignite outward from the center, the eclipse breathes in.
+    this.camera.fov = LINE_FOV;
+    this.camera.updateProjectionMatrix();
+    this.camera.position.set(0, 34, LINE_RADIUS);
+    this.lookTarget.set(0, 0, 0);
+    this.camera.lookAt(this.lookTarget);
+    this.syncSphericalFromCamera();
+    this.flying = true; // manual input stays off during the reveal
+
+    const intro = gsap.timeline({ onComplete: () => { this.flying = false; } });
+    this.orbitLine.scale.x = 0.001;
+    intro.to(this.orbitLine.scale, { x: 1, duration: 1.7, ease: 'power3.inOut' }, 0.25);
+
+    const warmMat = this.eclipseHaloWarm.material as THREE.SpriteMaterial;
+    const coolMat = this.eclipseHaloCool.material as THREE.SpriteMaterial;
+    const kernelMat = this.eclipseKernel.material as THREE.SpriteMaterial;
+    intro.fromTo(warmMat, { opacity: 0 }, { opacity: 0.52, duration: 2.2, ease: 'power2.out' }, 0.5);
+    intro.fromTo(coolMat, { opacity: 0 }, { opacity: 0.38, duration: 2.2, ease: 'power2.out' }, 0.7);
+    intro.fromTo(kernelMat, { opacity: 0 }, { opacity: 0.85, duration: 1.6, ease: 'power2.out' }, 0.4);
+    intro.fromTo(this.eclipseDisc.scale, { x: 0.55, y: 0.55, z: 0.55 }, { x: 1, y: 1, z: 1, duration: 1.8, ease: 'power3.out' }, 0.35);
+
+    // artists ignite from the center outward along the line.
+    // Half scale on the landing: small, restrained points — poster discipline.
+    this.nebulas.forEach((n) => {
+      const delay = 1.0 + (Math.abs(n.group.position.x) / LINE_SPAN) * 1.1;
+      n.group.scale.setScalar(0.001);
+      intro.to(n.group.scale, { x: 0.5, y: 0.5, z: 0.5, duration: 0.9, ease: 'back.out(1.3)' }, delay);
     });
 
     this.loop();
@@ -646,7 +794,13 @@ export class GalaxyEngine {
     const w = this.container.clientWidth || 1;
     const h = this.container.clientHeight || 1;
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // preserveDrawingBuffer: keeps the last frame available to the compositor
+    // (hidden-tab screenshots, user share-captures) at negligible cost
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      powerPreference: 'high-performance',
+      preserveDrawingBuffer: true,
+    });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(w, h);
     // Pure black clear: the post chain re-encodes the clear color (grey-lifting
@@ -670,6 +824,7 @@ export class GalaxyEngine {
 
   private initWorld() {
     this.glowTex = makeGlowTexture();
+    this.coreTex = makeCoreNebulaTexture();
     this.spikeTex = makeStarSpikeTexture();
     this.smokeTex = makeSmokeAtlas();
 
@@ -707,9 +862,11 @@ export class GalaxyEngine {
       depthWrite: false,
       uniforms: {
         uTime: { value: 0 },
+        uPulse: { value: 0 },
         uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
       },
     });
+    this.starPulseMat = starMat; // shared by starfield + near stars + milky way
     const stars = new THREE.Points(starGeo, starMat);
     stars.name = 'starfield';
     this.scene.add(stars);
@@ -741,8 +898,9 @@ export class GalaxyEngine {
     const nearStars = new THREE.Points(nearGeo, starMat);
     this.scene.add(nearStars);
 
-    // --- distant Milky Way band: a tilted arc of fine grain across the deep sky ---
-    const MW_COUNT = 5200;
+    // --- distant Milky Way band: a tilted arc of fine grain across the deep sky.
+    // Dense enough to read as THE river, still pure grain (no gas smears). ---
+    const MW_COUNT = 8600;
     const mwPos = new Float32Array(MW_COUNT * 3);
     const mwSize = new Float32Array(MW_COUNT);
     const mwPhase = new Float32Array(MW_COUNT);
@@ -761,10 +919,10 @@ export class GalaxyEngine {
         .addScaledVector(bandV, Math.sin(a) * rr)
         .addScaledVector(bandNormal, gaussRnd() * 240);
       mwPos[i * 3] = p.x; mwPos[i * 3 + 1] = p.y; mwPos[i * 3 + 2] = p.z;
-      mwSize[i] = Math.random() * 1.1 + 0.2;
+      mwSize[i] = Math.random() * 1.3 + 0.25;
       mwPhase[i] = Math.random() * Math.PI * 2;
       const c = mwTints[(Math.random() * mwTints.length) | 0];
-      const dim = 0.3 + Math.random() * 0.45; // a whisper — never competes with artists
+      const dim = 0.36 + Math.random() * 0.5; // present, still behind the artists
       mwColor[i * 3] = c.r * dim; mwColor[i * 3 + 1] = c.g * dim; mwColor[i * 3 + 2] = c.b * dim;
     }
     const mwGeo = new THREE.BufferGeometry();
@@ -774,76 +932,96 @@ export class GalaxyEngine {
     mwGeo.setAttribute('aColor', new THREE.BufferAttribute(mwColor, 3));
     const milkyWay = new THREE.Points(mwGeo, starMat);
     this.scene.add(milkyWay);
-    // faint gas smudges along the band give the grain its "river" continuity
-    for (let i = 0; i < 14; i++) {
-      const a = (i / 14) * Math.PI * 2 + Math.random() * 0.3;
-      const rr = 2150 + gaussRnd() * 300;
-      const smudge = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          map: this.smokeTex,
-          color: new THREE.Color('#b9b4ab'),
-          transparent: true,
-          opacity: 0.022 + Math.random() * 0.016,
-          blending: THREE.AdditiveBlending,
-          depthWrite: false,
-          rotation: Math.random() * Math.PI * 2,
-        })
-      );
-      smudge.position
-        .set(0, 0, 0)
-        .addScaledVector(bandU, Math.cos(a) * rr)
-        .addScaledVector(bandV, Math.sin(a) * rr)
-        .addScaledVector(bandNormal, gaussRnd() * 160);
-      smudge.scale.setScalar(420 + Math.random() * 380);
-      this.scene.add(smudge);
-    }
 
-    // --- remote background galaxies: tiny stretched glints in the far dark ---
-    for (let i = 0; i < 11; i++) {
+    // Atmospheric sprites live in one group: the poster landing needs a
+    // clean void, so the whole layer fades out in line mode and returns
+    // with the deep view. Each sprite remembers its authored opacity.
+    const ambience = new THREE.Group();
+    ambience.name = 'ambience';
+    this.scene.add(ambience);
+
+    // (retired: the milky-way gas smudges — soft grey blobs read as smears
+    // against the void; the particle band alone carries the river)
+
+    // --- remote background galaxies: miniature spiral silhouettes in the far
+    // dark (the reference collage always has neighbors on the horizon) ---
+    const miniTex = makeMiniGalaxyTexture();
+    for (let i = 0; i < 14; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(Math.random() * 2 - 1);
       const r = 1900 + Math.random() * 800;
-      const glint = new THREE.Sprite(
+      const mini = new THREE.Sprite(
         new THREE.SpriteMaterial({
-          map: this.glowTex,
+          map: miniTex,
           color: new THREE.Color(Math.random() > 0.5 ? '#d8d0c2' : '#c2c8d5'),
           transparent: true,
-          opacity: 0.045 + Math.random() * 0.05,
+          opacity: 0.07 + Math.random() * 0.07,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
           rotation: Math.random() * Math.PI,
         })
       );
-      glint.position.set(
+      mini.position.set(
         r * Math.sin(phi) * Math.cos(theta),
         r * Math.cos(phi),
         r * Math.sin(phi) * Math.sin(theta)
       );
-      glint.scale.set(24 + Math.random() * 34, (24 + Math.random() * 34) * (0.3 + Math.random() * 0.35), 1);
-      this.scene.add(glint);
+      const w = 34 + Math.random() * 42;
+      mini.scale.set(w, w * (0.55 + Math.random() * 0.4), 1);
+      mini.userData.baseOpacity = (mini.material as THREE.SpriteMaterial).opacity;
+      ambience.add(mini);
     }
 
-    // --- mid-field depth haze: huge ultra-faint cool veils drifting between
-    // the tier bands. They read as atmosphere: layers slide past each other
-    // during camera moves and the parallax sells true depth. ---
-    for (let i = 0; i < 12; i++) {
-      const a = (i / 12) * Math.PI * 2 + Math.random();
-      const rr = 480 + Math.random() * 720;
-      const veil = new THREE.Sprite(
+    // --- anchor stars: a few lone bright suns with diffraction spikes,
+    // breathing slowly — depth landmarks in the emptiest sky ---
+    const anchorTints = ['#fff3e0', '#f2ead9', '#dfe6f2', '#ffe9c8'];
+    for (let i = 0; i < 4; i++) {
+      const theta = (i / 4) * Math.PI * 2 + Math.random() * 0.9;
+      const phi = 0.7 + Math.random() * 1.3;
+      const r = 1700 + Math.random() * 650;
+      const star = new THREE.Sprite(
         new THREE.SpriteMaterial({
-          map: this.smokeTex,
-          color: new THREE.Color(i % 3 === 0 ? '#6b7186' : '#565b6c'),
+          map: this.spikeTex,
+          color: new THREE.Color(anchorTints[i % anchorTints.length]),
           transparent: true,
-          opacity: 0.014 + Math.random() * 0.014,
+          opacity: 0.5,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
-          rotation: Math.random() * Math.PI * 2,
         })
       );
-      veil.position.set(Math.cos(a) * rr, -160 + Math.random() * 320, Math.sin(a) * rr);
-      veil.scale.setScalar(500 + Math.random() * 460);
-      this.scene.add(veil);
+      star.position.set(
+        r * Math.sin(phi) * Math.cos(theta),
+        r * Math.cos(phi) * 0.8,
+        r * Math.sin(phi) * Math.sin(theta)
+      );
+      const base = 30 + Math.random() * 16;
+      star.scale.setScalar(base);
+      this.scene.add(star);
+      this.anchorStars.push({ sprite: star, phase: Math.random() * Math.PI * 2, base });
     }
+
+    // --- meteors: the sky's only unscheduled event ---
+    this.meteor = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: makeMeteorTexture(),
+        color: new THREE.Color('#fff3e0'),
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.meteor.scale.set(110, 11, 1);
+    this.meteor.renderOrder = 3;
+    this.scene.add(this.meteor);
+
+    // (retired: the mid-field haze veils — same grey-smear problem as the
+    // smudges; depth now comes from the galaxies and the starfield alone)
+
+    // born on the landing line: the atmosphere starts silent
+    ambience.traverse((o) => {
+      if (o instanceof THREE.Sprite) (o.material as THREE.SpriteMaterial).opacity = 0;
+    });
 
     // --- out-of-focus bokeh dust (near-field depth, Penderecki style) ---
     const BOKEH_COUNT = 42;
@@ -869,31 +1047,194 @@ export class GalaxyEngine {
         map: this.glowTex,
         size: 26,
         transparent: true,
-        opacity: 0.06,
+        // nearly invisible on the landing line — the poster void must stay
+        // clean; expandUniverse fades it up to its overview value (0.06)
+        opacity: 0.012,
         vertexColors: true,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         sizeAttenuation: true,
       })
     );
+    bokeh.name = 'bokehDust';
     this.scene.add(bokeh);
 
     // (no full-screen center glow — the void must stay void; depth comes
     // from the galaxies themselves)
 
-    // --- artist nebulas ---
-    const layout = this.computeLayout();
+    // --- artist nebulas — born on The Line (landing view) ---
+    this.lineLayout = this.computeLineLayout();
     this.artists.forEach((def) => {
-      const p = layout[def.id];
+      const p = this.lineLayout![def.id];
       const entry = this.buildNebula(def);
       entry.group.position.set(p.x, p.y, p.z);
       this.scene.add(entry.group);
       this.nebulas.set(def.id, entry);
     });
 
+    this.buildEclipse();
+
     // --- time mirror (shared instance) ---
     this.mirror = new TimeMirror(this.glowTex);
     this.scene.add(this.mirror.group);
+  }
+
+  /**
+   * The landing scenography: a full-width 1px orbit line, and at its center
+   * an eclipse — a pure-black disc with a tilted ring, backlit by a
+   * copper × celadon collision (the two temperature poles of the palette).
+   */
+  private buildEclipse() {
+    this.eclipse = new THREE.Group();
+    this.eclipse.name = 'eclipse';
+
+    // the orbit line the artists ride on — additive, whisper-thin
+    this.orbitLine = new THREE.Mesh(
+      new THREE.PlaneGeometry(LINE_SPAN * 2.35, 1.1),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color('#e8e0d2'),
+        transparent: true,
+        opacity: 0.3,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.orbitLine.renderOrder = 2;
+    this.eclipse.add(this.orbitLine);
+
+    // warm/cool collision behind the silhouette — copper leans right and
+    // bright, celadon left and quiet: asymmetric tension like the reference
+    this.eclipseHaloWarm = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.glowTex,
+        color: new THREE.Color('#d08a5e'),
+        transparent: true,
+        opacity: 0.52,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.eclipseHaloWarm.scale.setScalar(740);
+    this.eclipseHaloWarm.position.set(74, 14, -30);
+    this.eclipseHaloWarm.renderOrder = 3;
+    this.eclipse.add(this.eclipseHaloWarm);
+
+    this.eclipseHaloCool = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.glowTex,
+        color: new THREE.Color('#9fc8c4'),
+        transparent: true,
+        opacity: 0.38,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.eclipseHaloCool.scale.setScalar(610);
+    this.eclipseHaloCool.position.set(-70, -10, -30);
+    this.eclipseHaloCool.renderOrder = 3;
+    this.eclipse.add(this.eclipseHaloCool);
+
+    // white-hot rim right behind the disc — the light source being occluded
+    this.eclipseKernel = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: this.glowTex,
+        color: new THREE.Color(CORE_WHITE),
+        transparent: true,
+        opacity: 0.85,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.eclipseKernel.scale.setScalar(150);
+    this.eclipseKernel.renderOrder = 4;
+    this.eclipse.add(this.eclipseKernel);
+
+    // the black planet/vinyl silhouette — an occluder, not a light.
+    // Opaque black survives the additive stack and bloom untouched.
+    this.eclipseDisc = new THREE.Mesh(
+      new THREE.CircleGeometry(42, 64),
+      new THREE.MeshBasicMaterial({ color: 0x030304 })
+    );
+    this.eclipseDisc.renderOrder = 6;
+    this.eclipseDisc.userData = { type: 'eclipse' };
+    this.eclipse.add(this.eclipseDisc);
+
+    // tilted ring crossing the silhouette (orbit / tonearm dual read).
+    // End-faded texture + a soft glow underlay: reads as a designed orbit,
+    // not a stray scratch across the frame.
+    const ringTexCanvas = document.createElement('canvas');
+    ringTexCanvas.width = 256;
+    ringTexCanvas.height = 8;
+    const rctx = ringTexCanvas.getContext('2d')!;
+    const rg = rctx.createLinearGradient(0, 0, 256, 0);
+    rg.addColorStop(0, 'rgba(255,255,255,0)');
+    rg.addColorStop(0.16, 'rgba(255,255,255,0.9)');
+    rg.addColorStop(0.5, 'rgba(255,255,255,1)');
+    rg.addColorStop(0.84, 'rgba(255,255,255,0.9)');
+    rg.addColorStop(1, 'rgba(255,255,255,0)');
+    rctx.fillStyle = rg;
+    rctx.fillRect(0, 0, 256, 8);
+    const ringTex = new THREE.CanvasTexture(ringTexCanvas);
+    ringTex.colorSpace = THREE.SRGBColorSpace;
+
+    const ringGlow = new THREE.Mesh(
+      new THREE.PlaneGeometry(300, 7.5),
+      new THREE.MeshBasicMaterial({
+        map: ringTex,
+        color: new THREE.Color('#e8e0d2'),
+        transparent: true,
+        opacity: 0.14,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    ringGlow.position.z = 1.4;
+    ringGlow.rotation.z = -0.42;
+    ringGlow.renderOrder = 7;
+    this.eclipse.add(ringGlow);
+
+    const tiltRing = new THREE.Mesh(
+      new THREE.PlaneGeometry(300, 2.2),
+      new THREE.MeshBasicMaterial({
+        map: ringTex,
+        color: new THREE.Color('#e8e0d2'),
+        transparent: true,
+        opacity: 0.62,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    tiltRing.position.z = 1.5;
+    tiltRing.rotation.z = -0.42;
+    tiltRing.renderOrder = 8;
+    this.eclipse.add(tiltRing);
+
+    this.scene.add(this.eclipse);
+  }
+
+  /** One-dimensional artist sequence for the landing line, eclipse gap centered. */
+  private computeLineLayout(): Record<string, THREE.Vector3> {
+    const out: Record<string, THREE.Vector3> = {};
+    const n = this.artists.length;
+    const half = Math.ceil(n / 2);
+
+    // uneven, rhythmic spacing (deterministic) — never a metronome grid
+    const gapWeight = (i: number) => 0.62 + Math.abs(Math.sin(i * 12.9898 + 4.1)) * 0.85;
+
+    const placeSide = (list: ArtistDef[], dir: 1 | -1) => {
+      const weights = list.map((_, i) => gapWeight(i + (dir === 1 ? 0 : 40)));
+      const total = weights.reduce((s, w) => s + w, 0);
+      let acc = 0;
+      list.forEach((a, i) => {
+        acc += weights[i];
+        const x = dir * (LINE_GAP + (acc / total) * (LINE_SPAN - LINE_GAP));
+        out[a.id] = new THREE.Vector3(x, 0, 0);
+      });
+    };
+
+    placeSide(this.artists.slice(0, half), 1);
+    placeSide(this.artists.slice(half), -1);
+    return out;
   }
 
   private buildNebula(def: ArtistDef): NebulaEntry {
@@ -918,14 +1259,16 @@ export class GalaxyEngine {
     group.quaternion.setFromAxisAngle(tiltAxis, tiltAngle);
 
     // per-artist morphology: arm count, winding and radial easing all vary so
-    // no two galaxies read as the same stamped asset
+    // no two galaxies read as the same stamped asset. Winding runs tighter
+    // than before: arms should read as ripples ON a continuous disk, not as
+    // separate blades reaching out of a void.
     const ARM_COUNT = rand() < 0.28 ? 3 : 2;
-    const TURNS = ARM_TURNS * (0.8 + rand() * 0.75);
+    const TURNS = ARM_TURNS * (1.15 + rand() * 0.65);
     const rExp = 1.18 + rand() * 0.4;
     const armR = (t: number) => 0.13 + 0.87 * Math.pow(t, rExp);
 
     // ---- spiral-disk particles (stars are the seasoning; mist is the dish) ----
-    const COUNT = 3400;
+    const COUNT = 6200;
     const aRadius = new Float32Array(COUNT);
     const aTheta = new Float32Array(COUNT);
     const aHeight = new Float32Array(COUNT);
@@ -944,11 +1287,22 @@ export class GalaxyEngine {
     const armPhase = rand() * Math.PI * 2;
     const armSep = (Math.PI * 2) / ARM_COUNT; // correct spacing for 2 AND 3 arms
 
+    // shared radial color story: core-white → arm → accent → deep
+    const paintRadial = (t: number) => {
+      if (t < 0.24) tmp.copy(cCore).lerp(cArm, t / 0.24);
+      else if (t < 0.68) tmp.copy(cArm).lerp(cAccent, (t - 0.24) / 0.44);
+      else tmp.copy(cAccent).lerp(cDeep, (t - 0.68) / 0.32);
+    };
+
+    // Continuous-disk build (reference: one filled disk whose arms are
+    // density ripples): bulge 14%, disk floor 40%, arm crests 32%, dust 14%.
+    // The floor carries the reference's thickness — near-double particle
+    // count, each one quieter, so the body reads dense instead of bright.
     for (let i = 0; i < COUNT; i++) {
-      const kind = i / COUNT; // 0..0.15 bulge, 0.15..0.77 arms, 0.77..1 dust
+      const kind = i / COUNT;
       let r: number, theta: number, h: number, size: number, bright: number;
 
-      if (kind < 0.15) {
+      if (kind < 0.14) {
         // central bulge — warm white sphere-ish glow
         r = Math.abs(gauss()) * R * 0.13;
         theta = rand() * Math.PI * 2;
@@ -956,34 +1310,49 @@ export class GalaxyEngine {
         size = 1.0 + rand() * 2.1;
         bright = 1.0 + rand() * 0.7; // hotter core → stronger cinematic light ratio
         tmp.copy(cCore).lerp(cArm, rand() * 0.25);
-      } else if (kind < 0.77) {
-        // spiral arms — radius eased so outer windings spread apart (log feel)
+      } else if (kind < 0.54) {
+        // disk floor — azimuthally uniform fill so the space BETWEEN arms
+        // is never empty; density falls off outward, a sparse tail escapes
+        // past the rim so the disk dissolves instead of stopping
+        const t = Math.pow(rand(), 0.62);
+        r = R * armR(t);
+        if (rand() > 0.92) r *= 1.05 + rand() * 0.18; // stray outskirts
+        theta = rand() * Math.PI * 2;
+        h = gauss() * R * 0.034 * (1 + t * 1.1);
+        size = 0.7 + rand() * 1.9;
+        bright = 0.17 + rand() * 0.2; // a quiet floor — the crests must still read
+        paintRadial(t);
+        tmp.offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06);
+      } else if (kind < 0.86) {
+        // arm crests — same spiral, but broadly scattered: a brightness
+        // swell on the disk, not a separate blade
         const arm = i % ARM_COUNT;
         const t = Math.sqrt(rand()); // denser toward the center
         r = R * armR(t);
-        const spread = (0.11 + 0.2 * t) * (1 + Math.abs(gauss()) * 0.4);
+        const spread = (0.16 + 0.26 * t) * (1 + Math.abs(gauss()) * 0.4);
         theta = armPhase + arm * armSep + t * TURNS + gauss() * spread;
         h = gauss() * R * 0.028 * (1 + t * 1.1);
         size = 0.85 + rand() * 2.4;
-        bright = 0.4 + rand() * 0.45;
-        // radial color story: core-white → arm → accent → deep
-        if (t < 0.24) tmp.copy(cCore).lerp(cArm, t / 0.24);
-        else if (t < 0.68) tmp.copy(cArm).lerp(cAccent, (t - 0.24) / 0.44);
-        else tmp.copy(cAccent).lerp(cDeep, (t - 0.68) / 0.32);
+        bright = 0.46 + rand() * 0.42;
+        paintRadial(t);
         // sparse HII "knots": brighter, bigger, whiter
         if (rand() > 0.94) {
           bright = 1.5 + rand() * 0.7;
           size *= 2.1;
           tmp.lerp(cCore, 0.45);
         }
-        // subtle per-particle tint jitter keeps the arm painterly, not flat
         tmp.offsetHSL((rand() - 0.5) * 0.02, 0, (rand() - 0.5) * 0.06);
       } else {
-        // dark dust lanes hugging the inner edge of the arms — soft, dim, large
-        const arm = i % ARM_COUNT;
+        // dark dust — half hugging the arm crests, half strewn across the
+        // disk floor so the darkening belongs to the whole disk
         const t = 0.18 + 0.82 * Math.sqrt(rand());
         r = R * armR(t) * (0.96 + rand() * 0.04);
-        theta = armPhase + arm * armSep + t * TURNS - 0.13 + gauss() * 0.07;
+        if (rand() < 0.5) {
+          const arm = i % ARM_COUNT;
+          theta = armPhase + arm * armSep + t * TURNS - 0.13 + gauss() * 0.12;
+        } else {
+          theta = rand() * Math.PI * 2;
+        }
         h = gauss() * R * 0.02 * (1 + t);
         size = 2.2 + rand() * 3.2;
         bright = 0.16 + rand() * 0.16;
@@ -1047,15 +1416,20 @@ export class GalaxyEngine {
         const arm = i % ARM_COUNT;
         const t = dustLayer ? 0.15 + 0.85 * Math.sqrt(rand()) : Math.pow(rand(), 0.85);
         const r = R * (0.06 + 0.94 * Math.pow(t, rExp));
-        const spread = dustLayer ? 0.1 + 0.12 * t : 0.16 + 0.22 * t;
+        const spread = dustLayer ? 0.12 + 0.14 * t : 0.24 + 0.3 * t;
+        // glowing gas: a third drifts across the disk floor as faint filler —
+        // the reference's body is continuous mist; dust lanes stay arm-bound
+        const onDisk = !dustLayer && rand() < 0.3;
         sRadius[i] = r;
-        sTheta[i] = armPhase + arm * armSep + t * TURNS + gauss() * spread + (dustLayer ? -0.14 : 0);
+        sTheta[i] = onDisk
+          ? rand() * Math.PI * 2
+          : armPhase + arm * armSep + t * TURNS + gauss() * spread + (dustLayer ? -0.14 : 0);
         sHeight[i] = gauss() * R * 0.05 * (0.55 + t);
         // wide size variance: broad beds of mist + small detail wisps
         const big = rand() > 0.6;
         sSize[i] = dustLayer
           ? (big ? 34 + rand() * 26 : 16 + rand() * 18)
-          : (big ? 40 + rand() * 34 : 18 + rand() * 22);
+          : (big ? 48 + rand() * 38 : 20 + rand() * 24);
         sPhase[i] = rand();
         sRot[i] = (rand() - 0.5) * 0.45;
         sVariant[i] = (rand() * 4) | 0;
@@ -1066,7 +1440,8 @@ export class GalaxyEngine {
           if (t < 0.3) tmp.copy(cCore).lerp(cArm, t / 0.3);
           else tmp.copy(cArm).lerp(cAccent, (t - 0.3) / 0.7);
           tmp.multiplyScalar(0.82);
-          sAlpha[i] = 0.09 + rand() * 0.09;
+          // more puffs, each fainter: density comes from stacking, not glare
+          sAlpha[i] = (0.07 + rand() * 0.07) * (onDisk ? 0.6 : 1);
         }
         sColor[i * 3] = tmp.r; sColor[i * 3 + 1] = tmp.g; sColor[i * 3 + 2] = tmp.b;
       }
@@ -1101,8 +1476,8 @@ export class GalaxyEngine {
       group.add(pts);
       return { pts, mat };
     };
-    const gasLayer = buildSmoke(130, false);
-    const dustLayer = buildSmoke(70, true);
+    const gasLayer = buildSmoke(300, false);
+    const dustLayer = buildSmoke(120, true);
 
     // ---- continuous mist disk: the seamless gas flow beneath the puffs ----
     const mistMat = new THREE.ShaderMaterial({
@@ -1129,35 +1504,46 @@ export class GalaxyEngine {
     });
     const mist = new THREE.Mesh(new THREE.PlaneGeometry(R * 2.15, R * 2.15), mistMat);
     mist.rotation.x = -Math.PI / 2; // lie in the disk plane (group carries the tilt)
+    // Retired: the static disk pattern and the differentially-rotating
+    // particle arms drift apart over time, reading as a detached "ghost
+    // galaxy" beneath the real one. The puffs + particles carry the volume.
+    mist.visible = false;
     group.add(mist);
 
-    // warm-white galactic core (shared temperature across ALL galaxies)
+    // warm-white galactic core — an irregular elliptical bulge (never a
+    // geometric glow). Per-artist aspect + rotation so the shared texture
+    // reads unique on every galaxy.
+    const coreAspect = 0.56 + rand() * 0.14;
+    const coreRot = (rand() - 0.5) * 0.9;
     const core = new THREE.Sprite(
       new THREE.SpriteMaterial({
-        map: this.glowTex,
+        map: this.coreTex,
         color: new THREE.Color(CORE_WHITE),
         transparent: true,
         opacity: 0.85,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        rotation: coreRot,
       })
     );
-    const baseCoreScale = R * 0.42;
-    core.scale.setScalar(baseCoreScale);
+    const baseCoreScale = R * 0.5;
+    core.scale.set(baseCoreScale, baseCoreScale * coreAspect, 1);
     group.add(core);
 
-    // wide, very faint theme-colored veil — color identity without candy glow
+    // wide, very faint theme-colored veil — same elliptical language,
+    // aligned with the core so both read as one nebular body
     const veil = new THREE.Sprite(
       new THREE.SpriteMaterial({
-        map: this.glowTex,
+        map: this.coreTex,
         color: cArm,
         transparent: true,
         opacity: 0.055,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
+        rotation: coreRot,
       })
     );
-    veil.scale.setScalar(R * 1.9);
+    veil.scale.set(R * 2.1, R * 2.1 * coreAspect, 1);
     group.add(veil);
 
     // invisible ray target — a flattened ellipsoid hugging the visible disk,
@@ -1187,7 +1573,7 @@ export class GalaxyEngine {
       gas: gasLayer.pts, gasMat: gasLayer.mat,
       dust: dustLayer.pts, dustMat: dustLayer.mat,
       mist, mistMat,
-      core, veil, coreDim: 1, coreDimTarget: 1,
+      core, veil, coreAspect, coreDim: 1, coreDimTarget: 1,
       hit, label, labelName,
       baseCoreScale, diskRadius: R, armPhase, armCount: ARM_COUNT, turns: TURNS, rExp,
       spinTime: spinTime0, spinFactor: { v: 1 },
@@ -1413,10 +1799,117 @@ export class GalaxyEngine {
 
   // ------------------------------------------------ public navigation API
 
+  /**
+   * Unfold The Line into the full 3D overview: the eclipse scenography
+   * dissolves while the artists scatter from the 1D sequence to their
+   * tiered depth bands. Returns the target layout so a chained flight
+   * (e.g. focusArtist) can aim at final positions mid-tween.
+   */
+  expandUniverse(flyCamera = true): Record<string, THREE.Vector3> {
+    const layout = this.computeLayout();
+    if (this.disposed || this.mode !== 'line') return layout;
+    this.setMode('overview');
+
+    // the landing scenography dissolves
+    gsap.to(this.orbitLine.material as THREE.MeshBasicMaterial, { opacity: 0, duration: 1.0, ease: 'power2.in' });
+    [this.eclipseHaloWarm, this.eclipseHaloCool, this.eclipseKernel].forEach((s) => {
+      gsap.to(s.material as THREE.SpriteMaterial, { opacity: 0, duration: 1.0, ease: 'power2.in' });
+    });
+    gsap.to(this.eclipseDisc.scale, { x: 0.001, y: 0.001, z: 0.001, duration: 0.9, ease: 'power3.in' });
+    gsap.delayedCall(1.1, () => { if (this.mode !== 'line') this.eclipse.visible = false; });
+
+    // artists scatter to their depth bands, center first, growing to full size
+    let i = 0;
+    this.nebulas.forEach((n, id) => {
+      const p = layout[id];
+      gsap.to(n.group.position, {
+        x: p.x, y: p.y, z: p.z,
+        duration: 2.1, ease: 'power3.inOut', delay: 0.08 + i * 0.02,
+      });
+      gsap.to(n.group.scale, { x: 1, y: 1, z: 1, duration: 2.1, ease: 'power3.inOut', delay: 0.08 + i * 0.02 });
+      i++;
+    });
+
+    // near-field bokeh dust + atmospheric sprites belong to the deep view
+    const bokeh = this.scene.getObjectByName('bokehDust') as THREE.Points | null;
+    if (bokeh) gsap.to(bokeh.material as THREE.PointsMaterial, { opacity: 0.06, duration: 2.0 });
+    this.scene.getObjectByName('ambience')?.traverse((o) => {
+      if (o instanceof THREE.Sprite) {
+        gsap.to(o.material as THREE.SpriteMaterial, { opacity: o.userData.baseOpacity ?? 0.03, duration: 2.2, delay: 0.6 });
+      }
+    });
+
+    // telephoto → standard lens
+    gsap.to(this.camera, {
+      fov: 55, duration: 2.1, ease: 'power2.inOut',
+      onUpdate: () => this.camera.updateProjectionMatrix(),
+    });
+
+    if (flyCamera) {
+      const camEnd = new THREE.Vector3(
+        OVERVIEW_RADIUS * Math.sin(0.95) * Math.sin(-0.55),
+        OVERVIEW_RADIUS * Math.cos(0.95),
+        OVERVIEW_RADIUS * Math.sin(0.95) * Math.cos(-0.55)
+      );
+      this.flyTo(camEnd, new THREE.Vector3(0, 0, 0), { duration: 2.4, bloomPeak: 1.5 });
+    }
+    return layout;
+  }
+
+  /** Fold the overview back into the landing Line (ESC from overview). */
+  collapseToLine() {
+    if (this.disposed || this.mode !== 'overview' || this.flying) return;
+    this.setMode('line');
+    const layout = this.lineLayout || (this.lineLayout = this.computeLineLayout());
+
+    // artists fall back into the 1D sequence at poster scale
+    let i = 0;
+    this.nebulas.forEach((n, id) => {
+      const p = layout[id];
+      gsap.to(n.group.position, {
+        x: p.x, y: p.y, z: p.z,
+        duration: 2.0, ease: 'power3.inOut', delay: i * 0.016,
+      });
+      gsap.to(n.group.scale, { x: 0.5, y: 0.5, z: 0.5, duration: 2.0, ease: 'power3.inOut', delay: i * 0.016 });
+      i++;
+    });
+
+    const bokeh = this.scene.getObjectByName('bokehDust') as THREE.Points | null;
+    if (bokeh) gsap.to(bokeh.material as THREE.PointsMaterial, { opacity: 0.012, duration: 1.4 });
+    this.scene.getObjectByName('ambience')?.traverse((o) => {
+      if (o instanceof THREE.Sprite) {
+        gsap.to(o.material as THREE.SpriteMaterial, { opacity: 0, duration: 1.2 });
+      }
+    });
+
+    // scenography re-ignites once the fold is underway
+    this.eclipse.visible = true;
+    gsap.to(this.orbitLine.material as THREE.MeshBasicMaterial, { opacity: 0.3, duration: 1.5, delay: 0.8 });
+    gsap.to(this.eclipseHaloWarm.material as THREE.SpriteMaterial, { opacity: 0.52, duration: 1.6, delay: 0.9 });
+    gsap.to(this.eclipseHaloCool.material as THREE.SpriteMaterial, { opacity: 0.38, duration: 1.6, delay: 1.05 });
+    gsap.to(this.eclipseKernel.material as THREE.SpriteMaterial, { opacity: 0.85, duration: 1.4, delay: 0.85 });
+    gsap.to(this.eclipseDisc.scale, { x: 1, y: 1, z: 1, duration: 1.5, ease: 'back.out(1.4)', delay: 0.8 });
+
+    gsap.to(this.camera, {
+      fov: LINE_FOV, duration: 2.3, ease: 'power2.inOut',
+      onUpdate: () => this.camera.updateProjectionMatrix(),
+    });
+    this.flyTo(new THREE.Vector3(0, 34, LINE_RADIUS), new THREE.Vector3(0, 0, 0), {
+      duration: 2.5, bloomPeak: 1.3,
+    });
+  }
+
   focusArtist(id: string, notify = true) {
     if (this.disposed) return;
     const nebula = this.nebulas.get(id);
     if (!nebula) return;
+
+    // entering straight from The Line: unfold the universe around the flight
+    let centerOverride: THREE.Vector3 | null = null;
+    if (this.mode === 'line') {
+      const layout = this.expandUniverse(false);
+      centerOverride = layout[id].clone();
+    }
 
     const wasFocused = this.focusedArtistId;
     this.closeMirrorAndDeselect(false);
@@ -1436,7 +1929,7 @@ export class GalaxyEngine {
       gsap.to(n.mistMat.uniforms.uOpacity, { value: focused ? 0.3 : 0.18, duration: 1.2 });
     });
 
-    const center = nebula.group.position.clone();
+    const center = centerOverride ?? nebula.group.position.clone();
     // approach along the disk normal (so the spiral arms face the camera),
     // banked slightly sideways for a 3/4 cinematic view
     const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(nebula.group.quaternion);
@@ -1695,7 +2188,9 @@ export class GalaxyEngine {
   }
 
   resetView() {
-    if (this.mode === 'overview') {
+    if (this.mode === 'line') {
+      return; // the landing composition is fixed
+    } else if (this.mode === 'overview') {
       this.sphTarget = { theta: -0.55, phi: 1.02, radius: OVERVIEW_RADIUS };
     } else if (this.mode === 'artist') {
       this.sphTarget.radius = ARTIST_RADIUS;
@@ -1706,7 +2201,11 @@ export class GalaxyEngine {
   }
 
   getZoomPercent(): number {
-    const base = this.mode === 'overview' ? OVERVIEW_RADIUS : this.mode === 'artist' ? ARTIST_RADIUS : SONG_DISTANCE;
+    const base =
+      this.mode === 'line' ? LINE_RADIUS
+      : this.mode === 'overview' ? OVERVIEW_RADIUS
+      : this.mode === 'artist' ? ARTIST_RADIUS
+      : SONG_DISTANCE;
     return Math.round((base / this.sph.radius) * 100);
   }
 
@@ -1723,7 +2222,8 @@ export class GalaxyEngine {
     this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
-    if (this.pointerDown && !this.flying) {
+    if (this.pointerDown && !this.flying && this.mode !== 'line') {
+      // (The Line is a fixed head-on composition — no orbit dragging there)
       const dx = e.clientX - this.pointerDown.x;
       const dy = e.clientY - this.pointerDown.y;
       if (this.dragging || Math.hypot(dx, dy) > 6) {
@@ -1769,6 +2269,12 @@ export class GalaxyEngine {
     e.preventDefault();
     if (this.flying) return;
 
+    // On The Line, pushing forward unfolds the universe; there is no dolly
+    if (this.mode === 'line') {
+      if (e.deltaY < 0) this.expandUniverse();
+      return;
+    }
+
     // In song mode the lens fills the view — any zoom-out gesture means "step back"
     if (this.mode === 'song') {
       if (e.deltaY > 0) this.deselectSong(true);
@@ -1788,12 +2294,18 @@ export class GalaxyEngine {
     if (this.mode === 'artist' && this.sphTarget.radius > 480) {
       this.flyToOverview();
     }
+    // zooming far out of the overview folds the universe back into The Line
+    if (this.mode === 'overview' && this.sphTarget.radius > 1980) {
+      this.sphTarget.radius = OVERVIEW_RADIUS; // reset so the fold owns the camera
+      this.collapseToLine();
+    }
   };
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (this.mode === 'song') this.deselectSong(true);
       else if (this.mode === 'artist') this.flyToOverview();
+      else if (this.mode === 'overview') this.collapseToLine();
     }
   };
 
@@ -1815,6 +2327,15 @@ export class GalaxyEngine {
   }
 
   private handleClick(shiftKey: boolean) {
+    // clicking the eclipse silhouette unfolds the universe
+    if (this.mode === 'line') {
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      if (this.raycaster.intersectObject(this.eclipseDisc, false).length) {
+        this.expandUniverse();
+        return;
+      }
+    }
+
     const picked = this.pickAtPointer();
 
     if (!picked) {
@@ -1953,14 +2474,18 @@ export class GalaxyEngine {
       const isHovered = this.hovered?.type === 'artist' && this.hovered.id === id;
       let opacity = 0;
       if (this.screenPos.visible) {
-        if (this.mode === 'overview') {
+        if (this.mode === 'line') {
+          // the sequence stays silent until pointed at — poster discipline
+          opacity = this.searchQuery ? (n.matched ? 1 : 0) : isHovered ? 1 : 0;
+        } else if (this.mode === 'overview') {
           // depth-graded captions: near nebulas speak, far ones whisper
           const dist = this.camera.position.distanceTo(n.group.position);
           const depthFade = THREE.MathUtils.clamp(1.45 - dist / 1750, 0.3, 1);
           opacity = this.searchQuery ? (n.matched ? 1 : 0.16) : isHovered ? 1 : 0.72 * depthFade;
         } else {
-          // focused mode: show focused + hovered warp targets
-          opacity = isFocused ? 0.95 : isHovered ? 0.9 : 0.28;
+          // focused mode: the host name + hovered warp targets only — ambient
+          // half-faded captions read as ghost text over the bright arms
+          opacity = isFocused ? 0.95 : isHovered ? 0.9 : 0;
         }
         if (this.mode === 'song') opacity = 0; // the mirror carries its own title card
       }
@@ -1977,13 +2502,60 @@ export class GalaxyEngine {
       const isHovered = this.hovered?.type === 'song' && this.hovered.id === id;
       let opacity = 0;
       if (this.screenPos.visible && camDist < 620) {
-        if (this.mode === 'song') opacity = isSelected ? 0 : 0.12; // mirror carries its own title
-        else opacity = isHovered ? 1 : 0.85;
+        if (this.mode === 'song') {
+          // the mirror carries the selected title; neighbors stay readable
+          // so the listener can see where to jump next
+          opacity = isSelected ? 0 : isHovered ? 1 : 0.55;
+        } else {
+          opacity = isHovered ? 1 : 0.85;
+        }
       }
       p.label.style.opacity = String(opacity);
       const vAlign = p.labelBelow ? '15%' : '-100%';
       p.label.style.transform = `translate(-50%, ${vAlign}) translate(${this.screenPos.x}px, ${this.screenPos.y}px) scale(${isHovered ? 1.15 : 1})`;
       (p.label.firstChild as HTMLDivElement).style.color = isSelected ? '#fbbf24' : isHovered ? '#ffffff' : '';
+    });
+  }
+
+  /** One meteor: a thin streak sliding across the current view plane. */
+  private launchMeteor() {
+    this.meteorBusy = true;
+    const fwd = new THREE.Vector3();
+    this.camera.getWorldDirection(fwd);
+    const right = new THREE.Vector3().crossVectors(fwd, this.camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, fwd).normalize();
+
+    // far behind the galaxies, sliding diagonally downward across the view
+    const center = this.camera.position.clone().addScaledVector(fwd, 1500);
+    const start = center
+      .clone()
+      .addScaledVector(right, (Math.random() - 0.5) * 1500)
+      .addScaledVector(up, 250 + Math.random() * 650);
+    const ang = -0.35 - Math.random() * 0.75;
+    const span = 620 + Math.random() * 520;
+    const end = start
+      .clone()
+      .addScaledVector(right, Math.cos(ang) * span)
+      .addScaledVector(up, Math.sin(ang) * span);
+
+    const mat = this.meteor.material as THREE.SpriteMaterial;
+    mat.rotation = ang; // streak head leads the travel direction
+    this.meteor.position.copy(start);
+
+    const dur = 1.5 + Math.random() * 1.0;
+    gsap.killTweensOf(this.meteor.position);
+    gsap.killTweensOf(mat);
+    gsap.to(this.meteor.position, { x: end.x, y: end.y, z: end.z, duration: dur, ease: 'none' });
+    gsap.fromTo(mat, { opacity: 0 }, { opacity: 0.7, duration: dur * 0.28, ease: 'power1.out' });
+    gsap.to(mat, {
+      opacity: 0,
+      duration: dur * 0.55,
+      delay: dur * 0.45,
+      ease: 'power1.in',
+      onComplete: () => {
+        this.meteorBusy = false;
+        this.meteorNextAt = this.elapsed + 25 + Math.random() * 20;
+      },
     });
   }
 
@@ -2008,28 +2580,50 @@ export class GalaxyEngine {
     }
   }
 
-  /** rAF normally; setTimeout fallback keeps animations alive in hidden tabs
-   *  (background tabs, automated test drivers) where rAF never fires.
-   *  GSAP's own ticker is rAF-driven too, so we pump it manually while hidden. */
-  private scheduleNext = () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-      this.bgTimeoutId = window.setTimeout(() => {
-        (gsap.ticker as any).tick?.();
-        this.loop();
-      }, 33);
+  /** rAF normally; a Web Worker timer keeps animations alive in hidden tabs
+   *  (background playback, automated test drivers) — main-thread setTimeout
+   *  gets throttled to ~1s there, worker timers do not. GSAP's own ticker is
+   *  rAF-driven too, so we pump it manually while hidden. */
+  private bgWorker: Worker | null = null;
+
+  private ensureBgWorker() {
+    if (this.bgWorker) return;
+    const src =
+      "let id=null;onmessage=e=>{if(e.data==='start'&&id===null)id=setInterval(()=>postMessage(0),33);else if(e.data==='stop'&&id!==null){clearInterval(id);id=null}}";
+    this.bgWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+    this.bgWorker.onmessage = () => {
+      if (this.disposed || document.visibilityState !== 'hidden') return;
+      (gsap.ticker as any).tick?.();
+      this.frame();
+    };
+  }
+
+  private onVisibility = () => {
+    const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    gsap.ticker.lagSmoothing(hidden ? 0 : 500, 33);
+    if (hidden) {
+      this.ensureBgWorker();
+      this.bgWorker!.postMessage('start');
     } else {
+      this.bgWorker?.postMessage('stop');
+      // resume the rAF chain (the pending callback died with the hidden tab)
+      cancelAnimationFrame(this.rafId);
       this.rafId = requestAnimationFrame(this.loop);
     }
   };
 
-  private onVisibility = () => {
-    const hidden = document.visibilityState === 'hidden';
-    gsap.ticker.lagSmoothing(hidden ? 0 : 500, 33);
-  };
-
   private loop = () => {
     if (this.disposed) return;
-    this.scheduleNext();
+    // while hidden the worker drives frames; the rAF chain resumes on visibility
+    if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+      this.rafId = requestAnimationFrame(this.loop);
+    }
+    this.frame();
+  };
+
+  /** One simulation + render step (driven by rAF or the background worker). */
+  private frame = () => {
+    if (this.disposed) return;
 
     this.timer.update();
     const dt = Math.min(this.timer.getDelta(), 0.05);
@@ -2039,15 +2633,51 @@ export class GalaxyEngine {
 
     // camera damping (manual control only when not flying)
     if (!this.flying) {
-      // idle drift after 4s of no interaction
-      if (performance.now() - this.lastInteraction > 4000 && !this.mirror.isOpen) {
-        this.sphTarget.theta += dt * 0.016;
+      if (this.mode === 'line') {
+        // fixed head-on composition with the faintest handheld drift
+        this.camera.position.set(
+          Math.sin(t * 0.21) * 7,
+          34 + Math.sin(t * 0.34) * 5,
+          LINE_RADIUS
+        );
+        this.camera.lookAt(0, 0, 0);
+      } else {
+        // idle drift after 4s of no interaction
+        if (performance.now() - this.lastInteraction > 4000 && !this.mirror.isOpen) {
+          this.sphTarget.theta += dt * 0.016;
+        }
+        const k = 1 - Math.pow(0.0001, dt); // frame-rate independent smoothing
+        this.sph.theta += (this.sphTarget.theta - this.sph.theta) * k;
+        this.sph.phi += (this.sphTarget.phi - this.sph.phi) * k;
+        this.sph.radius += (this.sphTarget.radius - this.sph.radius) * k;
+        this.applySpherical();
       }
-      const k = 1 - Math.pow(0.0001, dt); // frame-rate independent smoothing
-      this.sph.theta += (this.sphTarget.theta - this.sph.theta) * k;
-      this.sph.phi += (this.sphTarget.phi - this.sph.phi) * k;
-      this.sph.radius += (this.sphTarget.radius - this.sph.radius) * k;
-      this.applySpherical();
+    }
+
+    // eclipse scenography: billboard toward the camera, breathe with the bass
+    if (this.eclipse.visible) {
+      this.eclipse.quaternion.copy(this.camera.quaternion);
+      const b = this.levels.bass;
+      this.eclipseHaloWarm.scale.setScalar(740 * (1 + Math.sin(t * 0.5) * 0.05 + b * 0.2));
+      this.eclipseHaloCool.scale.setScalar(610 * (1 + Math.sin(t * 0.43 + 1.7) * 0.05 + b * 0.14));
+      this.eclipseKernel.scale.setScalar(165 * (1 + Math.sin(t * 0.8) * 0.06 + b * 0.28));
+    }
+
+    // ambient theatre ------------------------------------------------------
+    // the whole sky breathes with the bass (starfield + near stars + milky way)
+    this.starPulseMat.uniforms.uPulse.value +=
+      (this.levels.bass - this.starPulseMat.uniforms.uPulse.value) * Math.min(1, dt * 4);
+
+    // lone anchor suns breathe on their own slow clocks
+    for (const a of this.anchorStars) {
+      const breathe = 0.5 + 0.28 * Math.sin(t * 0.31 + a.phase);
+      (a.sprite.material as THREE.SpriteMaterial).opacity = breathe;
+      a.sprite.scale.setScalar(a.base * (1 + Math.sin(t * 0.47 + a.phase * 2) * 0.05));
+    }
+
+    // meteors — rare, never during the mirror's intimacy
+    if (!this.meteorBusy && t > this.meteorNextAt && this.mode !== 'song') {
+      this.launchMeteor();
     }
 
     // nebula updates: slow differential spin + audio breathing
@@ -2065,7 +2695,8 @@ export class GalaxyEngine {
       mat.uniforms.uBrightness.value =
         (0.95 + n.hoverT * 0.4 + (n.matched ? 0.45 : 0)) * (1.0 - n.dimT * 0.65);
       const pulse = 1 + Math.sin(t * 1.1 + n.armPhase) * 0.03 + this.levels.bass * 0.2;
-      n.core.scale.setScalar(n.baseCoreScale * pulse * (1 + n.hoverT * 0.18));
+      const cs = n.baseCoreScale * pulse * (1 + n.hoverT * 0.18);
+      n.core.scale.set(cs, cs * n.coreAspect, 1);
       n.coreDim += (n.coreDimTarget - n.coreDim) * Math.min(1, dt * 3.5);
       (n.core.material as THREE.SpriteMaterial).opacity = (0.72 + this.levels.intensity * 0.3) * n.coreDim;
 
@@ -2124,7 +2755,8 @@ export class GalaxyEngine {
   dispose() {
     this.disposed = true;
     cancelAnimationFrame(this.rafId);
-    clearTimeout(this.bgTimeoutId);
+    this.bgWorker?.terminate();
+    this.bgWorker = null;
     const el = this.renderer.domElement;
     el.removeEventListener('pointerdown', this.onPointerDown);
     window.removeEventListener('pointermove', this.onPointerMove);
@@ -2144,7 +2776,17 @@ export class GalaxyEngine {
     });
     this.nebulas.clear();
     this.mirror.dispose();
+    this.eclipse.traverse((o) => {
+      if (o instanceof THREE.Mesh) {
+        o.geometry.dispose();
+        const m = o.material as THREE.MeshBasicMaterial;
+        m.map?.dispose();
+        m.dispose();
+      }
+      if (o instanceof THREE.Sprite) (o.material as THREE.Material).dispose();
+    });
     this.glowTex.dispose();
+    this.coreTex.dispose();
     this.scene.traverse((o) => {
       if (o instanceof THREE.Points || o instanceof THREE.Mesh || o instanceof THREE.Line) {
         o.geometry?.dispose();

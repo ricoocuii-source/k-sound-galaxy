@@ -378,6 +378,7 @@ interface Planet {
   root: THREE.Group;
   nebula: StableNebulaVisual;
   pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
+  label: HTMLDivElement;
   r: number;
   vinylRoot: THREE.Group | null;
   vinyls: Vinyl[];
@@ -421,8 +422,14 @@ for (const a of ARTISTS) {
   pickMesh.userData.planetIdx = planets.length;
   root.add(pickMesh);
 
+  const label = document.createElement('div');
+  label.className = 'artistGalaxyLabel';
+  label.textContent = a.name;
+  label.setAttribute('aria-hidden', 'true');
+  document.body.appendChild(label);
+
   scene.add(root);
-  planets.push({ a, root, nebula, pickMesh, r, vinylRoot: null, vinyls: [] });
+  planets.push({ a, root, nebula, pickMesh, label, r, vinylRoot: null, vinyls: [] });
   pickPlanets.push(pickMesh);
 }
 
@@ -488,7 +495,28 @@ function makeVinyl(node: MusicNode, galaxyRadius: number): Vinyl {
 /* 封面/试听预取 */
 const trackCache = new Map<string, { info: TrackInfo | null; tex: THREE.Texture | null }>();
 const trackPromises = new Map<string, Promise<{ info: TrackInfo | null; tex: THREE.Texture | null }>>();
+const trackInfoPromises = new Map<string, Promise<TrackInfo | null>>();
 const trackRetryAfter = new Map<string, number>();
+
+async function ensureTrackInfo(v: Vinyl) {
+  if (v.info?.previewUrl) return v.info;
+  const cached = trackCache.get(v.node.id);
+  if (cached) { v.info = cached.info; return cached.info; }
+
+  let pending = trackInfoPromises.get(v.node.id);
+  if (!pending) {
+    pending = fetchTrackInfo(v.node);
+    trackInfoPromises.set(v.node.id, pending);
+  }
+  try {
+    const info = await pending;
+    v.info = info;
+    return info;
+  } finally {
+    if (trackInfoPromises.get(v.node.id) === pending) trackInfoPromises.delete(v.node.id);
+  }
+}
+
 async function ensureTrack(v: Vinyl) {
   const cached = trackCache.get(v.node.id);
   if (cached) {
@@ -504,7 +532,7 @@ async function ensureTrack(v: Vinyl) {
   let pending = trackPromises.get(v.node.id);
   if (!pending) {
     pending = (async () => {
-      const info = await fetchTrackInfo(v.node);
+      const info = await ensureTrackInfo(v);
       let tex: THREE.Texture | null = null;
       const artworkUrl = info?.artworkUrl || info?.artworkUrlSmall;
       if (artworkUrl) {
@@ -578,9 +606,31 @@ class AudioBus {
   gain: GainNode | null = null;
   data: Uint8Array | null = null;
   playing = false;
-  muted = new URLSearchParams(location.search).has('muted');
+  muted = false;
   bands = { bass: 0, mid: 0, high: 0 };
+  private readonly fadeSeconds = 1;
+  private transitionId = 0;
+  private transitionTimer: ReturnType<typeof setTimeout> | null = null;
+  private transitionDone: (() => void) | null = null;
+  private tailFadeArmed = false;
   private peaks: Record<string, number> = { bass: 0.24, mid: 0.2, high: 0.16 };
+
+  constructor() {
+    this.el.preload = 'auto';
+    this.el.addEventListener('timeupdate', () => {
+      if (this.tailFadeArmed || !Number.isFinite(this.el.duration)) return;
+      const remaining = this.el.duration - this.el.currentTime;
+      if (remaining > 0 && remaining <= this.fadeSeconds) {
+        this.tailFadeArmed = true;
+        this.rampTo(0, remaining);
+      }
+    });
+    this.el.addEventListener('ended', () => {
+      this.playing = false;
+      this.tailFadeArmed = false;
+      this.setGainNow(0);
+    });
+  }
 
   unlock() {
     if (this.ctx) { this.ctx.resume(); return; }
@@ -592,14 +642,115 @@ class AudioBus {
     this.ctx = ctx; this.analyser = an; this.gain = g;
     this.data = new Uint8Array(an.frequencyBinCount);
   }
-  setMuted(m: boolean) { this.muted = m; if (this.gain) this.gain.gain.value = m ? 0 : 1; }
-  play(url: string) { this.el.src = url; this.el.currentTime = 0; this.playing = true; this.el.play().catch(() => { this.playing = false; }); }
+  private clearTransitionTimer() {
+    if (this.transitionTimer) clearTimeout(this.transitionTimer);
+    this.transitionTimer = null;
+    const done = this.transitionDone;
+    this.transitionDone = null;
+    done?.();
+  }
+  private setGainNow(value: number) {
+    if (!this.ctx || !this.gain) return;
+    const param = this.gain.gain;
+    param.cancelScheduledValues(this.ctx.currentTime);
+    param.setValueAtTime(value, this.ctx.currentTime);
+  }
+  private rampTo(value: number, seconds = this.fadeSeconds) {
+    if (!this.ctx || !this.gain) return;
+    const param = this.gain.gain;
+    const now = this.ctx.currentTime;
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+    param.linearRampToValueAtTime(value, now + Math.max(0.01, seconds));
+  }
+  private start(url: string, id: number) {
+    if (id !== this.transitionId) return;
+    this.el.pause();
+    this.el.src = url;
+    this.el.currentTime = 0;
+    this.tailFadeArmed = false;
+    this.setGainNow(0);
+    this.playing = true;
+    if (this.ctx?.state === 'suspended') void this.ctx.resume();
+    this.el.play().then(() => {
+      if (id === this.transitionId && !this.muted) this.rampTo(1);
+    }).catch((err) => {
+      if (id === this.transitionId) this.playing = false;
+      console.warn('Audio playback failed:', err);
+    });
+  }
+  setMuted(m: boolean) {
+    this.muted = m;
+    this.setGainNow(m ? 0 : 1);
+  }
+  play(url: string) {
+    const absoluteUrl = new URL(url, location.href).href;
+    const currentUrl = this.el.currentSrc || this.el.src;
+    if (currentUrl === absoluteUrl && !this.el.paused) return;
+
+    const id = ++this.transitionId;
+    this.clearTransitionTimer();
+    if (currentUrl && currentUrl !== absoluteUrl && !this.el.paused) {
+      this.rampTo(0);
+      this.transitionTimer = setTimeout(() => {
+        this.transitionTimer = null;
+        this.el.pause();
+        this.start(url, id);
+      }, this.fadeSeconds * 1000);
+      return;
+    }
+    this.start(url, id);
+  }
+  fadeOut(clearSource = false): Promise<void> {
+    const id = ++this.transitionId;
+    this.clearTransitionTimer();
+    if (!this.el.src) {
+      this.playing = false;
+      this.setGainNow(0);
+      return Promise.resolve();
+    }
+    if (this.el.paused && clearSource) {
+      this.playing = false;
+      this.setGainNow(0);
+      this.el.removeAttribute('src');
+      this.el.load();
+      return Promise.resolve();
+    }
+    if (!this.el.paused) this.rampTo(0);
+    else this.setGainNow(0);
+    return new Promise((resolve) => {
+      this.transitionDone = resolve;
+      this.transitionTimer = setTimeout(() => {
+        this.transitionTimer = null;
+        this.transitionDone = null;
+        if (id === this.transitionId) {
+          this.el.pause();
+          this.playing = false;
+          if (clearSource) { this.el.removeAttribute('src'); this.el.load(); }
+        }
+        resolve();
+      }, this.fadeSeconds * 1000);
+    });
+  }
   toggle() {
     if (!this.el.src) return;
-    if (this.el.paused) { this.playing = true; this.el.play().catch(() => { this.playing = false; }); }
-    else { this.el.pause(); this.playing = false; }
+    if (this.el.paused) {
+      const id = ++this.transitionId;
+      this.clearTransitionTimer();
+      this.setGainNow(0);
+      this.playing = true;
+      this.el.play().then(() => {
+        if (id === this.transitionId && !this.muted) this.rampTo(1);
+      }).catch((err) => {
+        if (id === this.transitionId) this.playing = false;
+        console.warn('Audio playback failed:', err);
+      });
+    } else {
+      void this.fadeOut();
+      this.playing = false;
+    }
   }
-  stop() { this.el.pause(); this.el.removeAttribute('src'); this.el.load(); this.playing = false; }
+  stop() { void this.fadeOut(true); }
   /** 降落白噪音(走同一 gain,静音时无声) */
   entryNoise(dur = 1.9) {
     const ctx = this.ctx; if (!ctx || !this.gain) return;
@@ -715,7 +866,7 @@ const HINTS: Record<Mode, string> = {
   approach: '正在接近歌手',
   orbit: '点击歌曲播放 · 点击星系切换 · ESC 返回',
   landing: '正在接近歌曲',
-  mirror: '点击歌曲切换 · 点击歌手直航 · ESC 返回 · P 暂停 · M 静音',
+  mirror: 'WASD 自由穿梭 · 点击歌曲切换 · 点击歌手直航 · ESC 返回 · P 暂停 · M 静音',
   surface: '点击歌曲播放 · ESC 返回',
   takeoff: '正在返回巡航',
 };
@@ -962,6 +1113,9 @@ function buildVinyls(p: Planet) {
   });
   p.vinylRoot = root;
   p.nebula.group.add(root);
+  // Prepare every preview URL during the approach so the eventual play() call
+  // can run synchronously inside the user's song click (autoplay-safe).
+  p.vinyls.forEach((v, i) => setTimeout(() => { void ensureTrackInfo(v); }, i * 120));
   // 预取前 6 首封面，其余悬停/打开镜面时再取。
   p.vinyls.slice(0, 6).forEach((v, i) => setTimeout(() => ensureTrack(v), i * 260));
 }
@@ -1418,10 +1572,9 @@ let dockVinyl: Vinyl | null = null;
 function landOnVinyl(v: Vinyl) {
   if (MODE !== 'orbit' || !focus) return;
   const p = focus;
-  mirrorTransitionEpoch++;
+  const landingEpoch = ++mirrorTransitionEpoch;
   drive.manual = false;
   setMode('landing');
-  audio.stop();
   setNowPlayingVisible(false);
 
   mirrorVinyl = v;
@@ -1432,13 +1585,11 @@ function landOnVinyl(v: Vinyl) {
   const to = mirrorPosition.clone().addScaledVector(approach, 62);
   to.y += 2;
 
-  // The mirror replaces the selected song star in its existing singer galaxy.
-  // Keep the focused nebula visible as spatial context, while hiding only the
-  // unrelated galaxies and the old song-star layer.
+  // The mirror replaces only the selected song star. Keep every singer nebula
+  // visible so playback remains a navigable galaxy, not an isolated stage.
   planets.forEach((planet) => {
-    const isFocusedSinger = planet === p;
     planet.root.visible = true;
-    planet.nebula.setDimmed(!isFocusedSinger);
+    planet.nebula.setDimmed(false);
   });
   // Replace only the selected song light. The remaining song lights keep
   // orbiting inside the visible singer nebula during playback.
@@ -1447,7 +1598,8 @@ function landOnVinyl(v: Vinyl) {
   setMirrorRenderQuality(true);
   timeMirror.open(mirrorPosition, p.a.css);
   timeMirror.faceToward(to);
-  void ensureTrack(v).then(() => {
+  const trackReady = queueMirrorSongPlayback(v, landingEpoch);
+  void trackReady.then(() => {
     if (mirrorVinyl !== v || !timeMirror.isOpen) return;
     timeMirror.setTexture(trackCache.get(v.node.id)?.tex ?? null);
   });
@@ -1459,7 +1611,7 @@ function landOnVinyl(v: Vinyl) {
       if (mirrorVinyl !== v || !timeMirror.isOpen) return;
       setMode('mirror');
       initDrive();
-      void playMirrorSong(v);
+      void playMirrorSong(v, landingEpoch);
     },
   });
 }
@@ -1468,8 +1620,22 @@ let mirrorVinyl: Vinyl | null = null;
 let mirrorTransitionEpoch = 0;
 const mirrorPosition = new THREE.Vector3();
 
-async function playMirrorSong(v: Vinyl) {
+function queueMirrorSongPlayback(v: Vinyl, expectedEpoch: number, fadeReady: Promise<void> | null = null) {
+  const infoReady = ensureTrackInfo(v);
+  const trackReady = ensureTrack(v);
+  // The first song must start in the click call stack; deferring even a cached
+  // URL through Promise.all can lose browser user activation.
+  if (!fadeReady && v.info?.previewUrl) audio.play(v.info.previewUrl);
+  else void Promise.all([infoReady, fadeReady ?? Promise.resolve()]).then(([info]) => {
+    if (expectedEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v) return;
+    if (info?.previewUrl) audio.play(info.previewUrl);
+  });
+  return trackReady;
+}
+
+async function playMirrorSong(v: Vinyl, expectedEpoch: number) {
   if (v.coverState !== 2) await ensureTrack(v);
+  if (expectedEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v) return;
   const isNew = collect(v.node.id);
   updateLogHud(focus);
   if (isNew) toast(`已收集 · ${v.node.name}`);
@@ -1494,11 +1660,10 @@ function switchMirrorSong(v: Vinyl) {
   drive.manual = false;
   drive.keys.clear();
   setMode('landing');
-  audio.stop();
 
-  // 在旧镜面退场时预取封面；镜面完全散开后才在新歌曲亮星处
-  // 重新出生，并复用首次选歌的贝塞尔飞入，而不是搬运旧对象。
-  const trackReady = ensureTrack(v);
+  // 切歌动作一发生就淡出旧歌；新歌与镜头并行准备，不再等待落位。
+  const fadeReady = audio.fadeOut();
+  const trackReady = queueMirrorSongPlayback(v, switchEpoch, fadeReady);
   timeMirror.close(() => {
     if (switchEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v || MODE !== 'landing') return;
 
@@ -1527,7 +1692,7 @@ function switchMirrorSong(v: Vinyl) {
         if (switchEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v || !timeMirror.isOpen) return;
         setMode('mirror');
         initDrive();
-        void playMirrorSong(v);
+        void playMirrorSong(v, switchEpoch);
       },
     });
   });
@@ -1948,6 +2113,7 @@ function tick() {
       dt,
       { intensity: (audio.bands.bass + audio.bands.mid + audio.bands.high) / 3, bass: audio.bands.bass },
       camera.position.distanceTo(p.root.position),
+      camera.position,
     );
   }
   const mirrorAudioActive = audio.playing && !audio.el.paused;
@@ -1957,14 +2123,8 @@ function tick() {
     mids: audio.bands.mid,
     highs: audio.bands.high,
   } : { intensity: 0, bass: 0, mids: 0, highs: 0 }, camera);
-  if (MODE === 'mirror' && drive.manual) {
-    // 镜面始终属于当前歌手星云；自由飞行只影响观察位置，不再把
-    // 作为空间背景的当前歌手星云压暗。
-    const dimForMirror = timeMirror.distanceFade > 0.42;
-    planets.forEach((planet) => {
-      planet.nebula.setDimmed(planet === focus ? false : dimForMirror);
-    });
-  }
+  // Playback keeps the complete artist field lit. Flying away from the mirror
+  // may fade the mirror itself, but never turns the other singer nebulae off.
 
   // ---- 歌曲亮星：在完整星云盘面稳定散布，并与星云保持同一转速 ----
   if (focus?.vinylRoot) {
@@ -2120,9 +2280,41 @@ function tick() {
 
   // ---- HUD ----
   pick();
+  // Every on-screen singer stays named. After entering an orbit, only the
+  // current singer steps aside; all other galaxies remain readable targets.
+  const artistLabelSlots: Array<{ x: number; y: number }> = [];
+  for (const p of planets) {
+    tmpV.copy(p.root.position).project(camera);
+    const inFrame = tmpV.z < 1 && tmpV.x > -1.08 && tmpV.x < 1.08 && tmpV.y > -1.08 && tmpV.y < 1.08;
+    const visible = MODE !== 'idle' && p !== focus && inFrame;
+    if (visible) {
+      const distance = camera.position.distanceTo(p.root.position);
+      const focalPx = innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+      const labelOffsetY = THREE.MathUtils.clamp((p.r / Math.max(distance, 1)) * focalPx * 0.72 + 12, 20, 92);
+      const baseX = THREE.MathUtils.clamp((tmpV.x * 0.5 + 0.5) * innerWidth, 88, innerWidth - 88);
+      const baseY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelOffsetY;
+      let labelY = baseY;
+      // Names never disappear to solve a collision. Nearby labels instead
+      // take the nearest free line above/below their own nebula.
+      for (const dy of [0, -20, 20, -40, 40, -60, 60, -80, 80]) {
+        const candidateY = baseY + dy;
+        const collides = artistLabelSlots.some(
+          (slot) => Math.abs(slot.x - baseX) < 108 && Math.abs(slot.y - candidateY) < 18,
+        );
+        if (!collides) {
+          labelY = candidateY;
+          break;
+        }
+      }
+      artistLabelSlots.push({ x: baseX, y: labelY });
+      p.label.style.transform = `translate(${baseX.toFixed(1)}px, ${labelY.toFixed(1)}px)`;
+    }
+    p.label.style.opacity = visible ? (p === hoverPlanet ? '1' : '0.84') : '0';
+    p.label.setAttribute('aria-hidden', String(!visible));
+  }
   if ((MODE === 'cruise' || MODE === 'orbit' || MODE === 'mirror') && hoverPlanet) {
     el.retName.textContent = hoverPlanet.a.name;
-    el.retSub.textContent = MODE === 'cruise' ? '入轨' : '切换歌手';
+    el.retSub.textContent = '点击入轨';
     el.reticle.style.setProperty('--reticle-acc', hoverPlanet.a.css);
     const ok = projectTo(el.reticle, hoverPlanet.root.position, 26, -20);
     el.reticle.classList.toggle('show', ok);

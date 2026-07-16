@@ -125,7 +125,12 @@ export interface StableNebulaVisual {
   core: THREE.Sprite;
   radius: number;
   morphology: string;
-  tick: (dt: number, audio: StableNebulaAudio, cameraDistance: number) => void;
+  tick: (
+    dt: number,
+    audio: StableNebulaAudio,
+    cameraDistance: number,
+    cameraPosition: THREE.Vector3,
+  ) => void;
   setDimmed: (dimmed: boolean) => void;
   songPosition: (index: number, total: number, out: THREE.Vector3) => THREE.Vector3;
 }
@@ -544,12 +549,14 @@ export function createStableNebulaVisual(options: {
       sVariant[i] = (rand() * 4) | 0;
       if (dustLayer) {
         tmp.copy(cDust).lerp(cDeep, rand() * 0.7);
-        sAlpha[i] = 0.08 + rand() * 0.08;
+        sAlpha[i] = 0.12 + rand() * 0.1;
       } else {
         if (t < 0.3) tmp.copy(cCore).lerp(cArm, t / 0.3);
         else tmp.copy(cArm).lerp(cAccent, (t - 0.3) / 0.7);
         tmp.multiplyScalar(0.82);
-        sAlpha[i] = (0.035 + rand() * 0.05) * (0.45 + t * 0.55);
+        // The gas stays visibly present as a continuous cloud at overview
+        // distance; stars sit inside it instead of replacing it.
+        sAlpha[i] = (0.08 + rand() * 0.09) * (0.58 + t * 0.42);
       }
       sColor[i * 3] = tmp.r;
       sColor[i * 3 + 1] = tmp.g;
@@ -579,7 +586,7 @@ export function createStableNebulaVisual(options: {
         uPixelRatio: { value: pixelRatio },
         uMap: { value: assets.smoke },
         uOpacity: { value: 1 },
-        uLightGain: { value: dustLayer ? 0.24 : 0.32 },
+        uLightGain: { value: dustLayer ? 0.32 : 0.5 },
       },
     });
     group.add(new THREE.Points(geo, mat));
@@ -598,7 +605,7 @@ export function createStableNebulaVisual(options: {
     uniforms: {
       uSpinTime: { value: spinTime },
       uFocus: { value: 0 },
-      uOpacity: { value: 0 },
+      uOpacity: { value: 0.27 },
       uArmPhase: { value: armPhase },
       uArmCount: { value: armCount },
       uRExpInv: { value: 1 / rExp },
@@ -610,19 +617,24 @@ export function createStableNebulaVisual(options: {
       uAccent: { value: cAccent.clone().multiplyScalar(0.8) },
     },
   });
-  // The old continuous plane produced two broad dart/boomerang silhouettes
-  // at grazing angles. Keep the material in the public interface, but remove
-  // that flat mesh; the enlarged volumetric smoke field now supplies the body.
+  // Restore the continuous gas body that gives the approved "cloud" quality.
+  // It is still a real disk inside the 3D nebula, not a camera-facing card.
+  // Its opacity is reduced only when the viewer looks across its edge, which
+  // avoids the former thin dart silhouette during free flight.
+  const mist = new THREE.Mesh(new THREE.PlaneGeometry(R * 2.18, R * 2.18), mistMat);
+  mist.rotation.x = -Math.PI / 2;
+  mist.renderOrder = -0.2;
+  group.add(mist);
 
   const core = new THREE.Sprite(new THREE.SpriteMaterial({
     map: assets.glow,
     color: new THREE.Color(CORE_WHITE),
     transparent: true,
-    opacity: 0.22,
+    opacity: 0.68,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   }));
-  core.scale.setScalar(R * morphology.coreScale);
+  core.scale.setScalar(R * Math.max(0.3, morphology.coreScale));
   group.add(core);
 
   const veil = new THREE.Sprite(new THREE.SpriteMaterial({
@@ -639,7 +651,16 @@ export function createStableNebulaVisual(options: {
   let dim = 1;
   let dimTarget = 1;
   const setDimmed = (dimmed: boolean) => { dimTarget = dimmed ? 0 : 1; };
-  const tick = (dt: number, audio: StableNebulaAudio, cameraDistance: number) => {
+  const worldCenter = new THREE.Vector3();
+  const diskNormal = new THREE.Vector3();
+  const viewDirection = new THREE.Vector3();
+  const diskQuaternion = new THREE.Quaternion();
+  const tick = (
+    dt: number,
+    audio: StableNebulaAudio,
+    cameraDistance: number,
+    cameraPosition: THREE.Vector3,
+  ) => {
     const familySpin = morphology.barMass > 0 ? 0.44 : 1;
     spinTime += dt * (0.5 + audio.bass * 0.28) * handedness * familySpin;
     dim += (dimTarget - dim) * Math.min(1, dt * 3.5);
@@ -650,9 +671,14 @@ export function createStableNebulaVisual(options: {
     cloudMat.uniforms.uOpacity.value = THREE.MathUtils.lerp(0.035, 0.78, dim);
     gasMat.uniforms.uOpacity.value = THREE.MathUtils.lerp(0.025, 1, dim);
     dustMat.uniforms.uOpacity.value = THREE.MathUtils.lerp(0.08, 1, dim);
-    mistMat.uniforms.uOpacity.value = 0;
+    group.getWorldPosition(worldCenter);
+    diskNormal.set(0, 1, 0).applyQuaternion(group.getWorldQuaternion(diskQuaternion));
+    viewDirection.copy(cameraPosition).sub(worldCenter).normalize();
+    const facing = Math.abs(diskNormal.dot(viewDirection));
+    const mistFacing = THREE.MathUtils.smoothstep(facing, 0.14, 0.58);
+    mistMat.uniforms.uOpacity.value = 0.32 * dim * mistFacing;
     // Keep the whole body stable: only light breathes with playback, geometry never shakes/scales.
-    (core.material as THREE.SpriteMaterial).opacity = (0.18 + audio.intensity * 0.08) * THREE.MathUtils.lerp(0.015, 1, dim);
+    (core.material as THREE.SpriteMaterial).opacity = (0.62 + audio.intensity * 0.12) * THREE.MathUtils.lerp(0.015, 1, dim);
     // Keep the same low-energy body visible in overview; previously it faded
     // to 20%, leaving only unnaturally regular spiral ridges at long range.
     const veilFade = 1 - 0.42 * THREE.MathUtils.smoothstep(cameraDistance, 480, 950);

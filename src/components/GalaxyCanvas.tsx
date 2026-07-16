@@ -26,8 +26,11 @@ interface GalaxyCanvasProps {
   navRequest: NavRequest | null;
   onSelectNode: (node: MusicNode | null) => void;
   onCompareNodes: (nodeA: MusicNode, nodeB: MusicNode) => void;
+  onModeChange?: (mode: EngineMode) => void;
   searchQuery: string;
 }
+
+const SIGNATURE = 'K SOUND GALAXY';
 
 export default function GalaxyCanvas({
   selectedNode,
@@ -37,6 +40,7 @@ export default function GalaxyCanvas({
   navRequest,
   onSelectNode,
   onCompareNodes,
+  onModeChange,
   searchQuery,
 }: GalaxyCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -44,11 +48,23 @@ export default function GalaxyCanvas({
   const engineRef = useRef<GalaxyEngine | null>(null);
   const mirrorCardRef = useRef<HTMLDivElement | null>(null);
 
-  const [mode, setMode] = useState<EngineMode>('overview');
+  const [mode, setMode] = useState<EngineMode>('line');
   const [, setFocusedArtistId] = useState<string | null>(null);
+  // drives the landing HUD's CSS entrance (timeout survives hidden tabs)
+  const [lineHudVisible, setLineHudVisible] = useState(false);
+  useEffect(() => {
+    if (mode !== 'line') {
+      setLineHudVisible(false);
+      return;
+    }
+    const t = window.setTimeout(() => setLineHudVisible(true), 900);
+    return () => window.clearTimeout(t);
+  }, [mode]);
 
   const selectedRef = useRef<MusicNode | null>(null);
   selectedRef.current = selectedNode;
+  const onModeChangeRef = useRef(onModeChange);
+  onModeChangeRef.current = onModeChange;
 
   const artists = useMemo<ArtistDef[]>(() => {
     const map = new Map<string, ArtistDef>();
@@ -86,9 +102,17 @@ export default function GalaxyCanvas({
       },
       onDeselectSong: () => onSelectNode(null),
       onHoverChange: () => {},
-      onModeChange: (m) => setMode(m),
+      onModeChange: (m) => {
+        setMode(m);
+        onModeChangeRef.current?.(m);
+      },
     });
     engineRef.current = engine;
+    (window as any).__galaxy = engine; // dev/QA handle
+    // sync React to the engine's actual starting mode (an HMR remount can
+    // otherwise leave stale chrome visible over the landing line)
+    setMode(engine.mode);
+    onModeChangeRef.current?.(engine.mode);
 
     // position the mirror title card every frame without React re-renders
     let raf = 0;
@@ -232,9 +256,52 @@ export default function GalaxyCanvas({
         )}
       </div>
 
+      {/* ---------- THE LINE: poster HUD (vertical signature + enter cue) ----------
+          CSS transitions/keyframes only — JS animation loops freeze in hidden
+          tabs, and the landing must compose correctly even there. */}
+      {mode === 'line' && (
+        <div
+          className={`absolute inset-0 z-20 pointer-events-none transition-opacity duration-[1400ms] ease-out ${
+            lineHudVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+        >
+          {/* vertical signature along the left edge, letter by letter */}
+          <div className="absolute left-7 md:left-12 top-1/2 -translate-y-1/2 flex flex-col items-center select-none">
+            {SIGNATURE.split('').map((ch, i) =>
+              ch === ' ' ? (
+                <span key={i} className="h-4" />
+              ) : (
+                <span
+                  key={i}
+                  className={`font-serif text-[13px] text-[#e8e0d2]/60 leading-[1.9] tracking-wide transition-opacity duration-[900ms] ${
+                    lineHudVisible ? 'opacity-100' : 'opacity-0'
+                  }`}
+                  style={{ transitionDelay: `${300 + i * 55}ms` }}
+                >
+                  {ch}
+                </span>
+              )
+            )}
+          </div>
+
+          {/* coordinates whisper, top right under the (hidden) header */}
+          <div className="absolute top-8 right-8 md:right-12 font-mono text-[8.5px] tracking-[0.3em] text-[#e8e0d2]/28 uppercase select-none">
+            25 systems · one orbit
+          </div>
+
+          {/* enter cue */}
+          <button
+            onClick={() => engineRef.current?.expandUniverse()}
+            className="enter-breathe absolute bottom-12 left-1/2 -translate-x-1/2 pointer-events-auto font-mono text-[9.5px] tracking-[0.42em] uppercase text-[#e8e0d2] hover:text-white cursor-pointer"
+          >
+            Enter the galaxy
+          </button>
+        </div>
+      )}
+
       {/* ← Back — visible only inside a system */}
       <AnimatePresence>
-        {mode !== 'overview' && (
+        {(mode === 'artist' || mode === 'song') && (
           <motion.button
             key="back"
             initial={{ opacity: 0, x: -6 }}
@@ -249,30 +316,34 @@ export default function GalaxyCanvas({
         )}
       </AnimatePresence>
 
-      {/* Zoom controls — three quiet icons */}
-      <div className="absolute bottom-24 right-6 md:right-10 z-30 flex flex-col items-center gap-3">
-        <button
-          onClick={() => engineRef.current?.zoomBy(0.8)}
-          className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
-          title="Zoom in"
-        >
-          <ZoomIn className="w-4 h-4" strokeWidth={1.3} />
-        </button>
-        <button
-          onClick={() => engineRef.current?.zoomBy(1.25)}
-          className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
-          title="Zoom out"
-        >
-          <ZoomOut className="w-4 h-4" strokeWidth={1.3} />
-        </button>
-        <button
-          onClick={() => engineRef.current?.resetView()}
-          className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
-          title="Re-center view"
-        >
-          <Maximize2 className="w-3.5 h-3.5" strokeWidth={1.3} />
-        </button>
-      </div>
+      {/* Zoom controls — three quiet icons (hidden on the landing line) */}
+      {mode !== 'line' && (
+          <div
+            className="absolute bottom-24 right-6 md:right-10 z-30 flex flex-col items-center gap-3"
+          >
+            <button
+              onClick={() => engineRef.current?.zoomBy(0.8)}
+              className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
+              title="Zoom in"
+            >
+              <ZoomIn className="w-4 h-4" strokeWidth={1.3} />
+            </button>
+            <button
+              onClick={() => engineRef.current?.zoomBy(1.25)}
+              className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
+              title="Zoom out"
+            >
+              <ZoomOut className="w-4 h-4" strokeWidth={1.3} />
+            </button>
+            <button
+              onClick={() => engineRef.current?.resetView()}
+              className="text-[#e8e0d2]/40 hover:text-[#e8e0d2] transition-colors cursor-pointer"
+              title="Re-center view"
+            >
+              <Maximize2 className="w-3.5 h-3.5" strokeWidth={1.3} />
+            </button>
+          </div>
+        )}
     </div>
   );
 }

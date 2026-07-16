@@ -63,6 +63,15 @@
   cursor: pointer;
 }
 
+/* Landing enter-cue breathing (CSS keyframes survive where JS loops freeze) */
+.enter-breathe {
+  animation: enter-breathe 3.2s ease-in-out infinite;
+}
+@keyframes enter-breathe {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 0.85; }
+}
+
 /* Analog film grain — SVG turbulence, animated in discrete steps.
    soft-light (NOT overlay): overlay lifts near-black toward grey. */
 .galaxy-grain {

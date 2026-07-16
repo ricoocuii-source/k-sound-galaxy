@@ -28,6 +28,12 @@ export default function InsightPanel({
 }: InsightPanelProps) {
   const [insight, setInsight] = useState<ConnectionInsight | null>(null);
   const [loading, setLoading] = useState(false);
+  // drives the CSS slide-in on mount
+  const [slidIn, setSlidIn] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSlidIn(true), 30);
+    return () => window.clearTimeout(t);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [loadingMsg, setLoadingMsg] = useState('Aligning stellar music orbits...');
 
@@ -172,12 +178,13 @@ export default function InsightPanel({
   const artistName = (nodeA.artist || '').split('/')[0].trim();
 
   return (
-    <motion.div
-      initial={{ x: '100%', opacity: 0.6 }}
-      animate={{ x: 0, opacity: 1 }}
-      exit={{ x: '100%', opacity: 0.6 }}
-      transition={{ type: 'spring', damping: 28, stiffness: 200 }}
-      className="fixed inset-y-0 right-0 w-full max-w-sm bg-[#05060a]/80 backdrop-blur-xl flex flex-col z-35"
+    // CSS slide-in (not a JS spring): JS animation loops freeze in hidden
+    // tabs and left the panel stranded half off-screen. CSS transitions
+    // settle correctly everywhere.
+    <div
+      className={`fixed inset-y-0 right-0 w-full max-w-sm bg-[#05060a]/80 backdrop-blur-xl flex flex-col z-35 transition-[transform,opacity] duration-500 ease-out ${
+        slidIn ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-60'
+      }`}
     >
       {/* close */}
       <button
@@ -340,6 +347,6 @@ export default function InsightPanel({
           )}
         </AnimatePresence>
       </div>
-    </motion.div>
+    </div>
   );
 }
