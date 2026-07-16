@@ -46,6 +46,7 @@ export default defineConfig(() => {
         input: {
           main: path.resolve(__dirname, 'index.html'),
           proto7: path.resolve(__dirname, 'proto7.html'),
+          audioAudition: path.resolve(__dirname, 'audio-audition.html'),
         },
       },
     },

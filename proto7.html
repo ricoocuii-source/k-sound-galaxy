@@ -113,7 +113,11 @@
       }
       .reticle.show { opacity: 1; }
       .reticle b { display: block; font-family: var(--display); font-size: var(--type-title); font-weight: 600; letter-spacing: var(--track-body); color: var(--ink); }
-      .reticle span { display: block; margin-top: 3px; font-size: var(--type-micro); letter-spacing: var(--track-label); color: var(--reticle-acc); }
+      .reticle span {
+        display: block; margin-top: 3px; font-size: var(--type-micro); letter-spacing: var(--track-label);
+        color: color-mix(in srgb, var(--reticle-acc) 35%, white);
+        text-shadow: 0 0 8px rgba(255,255,255,0.18);
+      }
 
       /* ---------- 悬停唱片标签 ---------- */
       .vinylTag[data-augmented-ui] {
@@ -233,6 +237,38 @@
     </style>
   </head>
   <body>
+    <audio
+      id="sectorAmbience"
+      data-ambient="sector"
+      src="/audio/ambient-sector.ogg"
+      preload="auto"
+      autoplay
+      loop
+      playsinline
+      hidden
+      aria-hidden="true"
+    ></audio>
+    <script>
+      (() => {
+        const audio = document.getElementById('sectorAmbience');
+        if (!(audio instanceof HTMLAudioElement)) return;
+        audio.volume = 0;
+        audio.dataset.autoplayState = 'pending';
+        audio.play().then(() => {
+          audio.dataset.autoplayState = 'playing';
+          const startedAt = performance.now();
+          const fade = (now) => {
+            const p = Math.min(1, (now - startedAt) / 2000);
+            audio.volume = 0.13 * (1 - Math.pow(1 - p, 3));
+            if (p < 1) audio.__sectorFadeFrame = requestAnimationFrame(fade);
+            else delete audio.__sectorFadeFrame;
+          };
+          audio.__sectorFadeFrame = requestAnimationFrame(fade);
+        }).catch(() => {
+          audio.dataset.autoplayState = 'blocked';
+        });
+      })();
+    </script>
     <div id="stage"></div>
     <div class="vignette"></div>
     <div class="grain"></div>
@@ -289,7 +325,7 @@
       <div class="creditsPanel">
         星船 Star Fighter © 3DHaupt（CC BY-NC · 非商用）· 星云渲染 Bezier Stable<br/>
         HUD augmented-ui（MIT）· 引擎 three.js（MIT）· warp Star Nest © Kali（MIT）<br/>
-        音源 iTunes 30 秒试听
+        音源 Sector（SRG774 · CC0）· iTunes 30 秒试听
       </div>
     </details>
 

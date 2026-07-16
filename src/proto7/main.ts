@@ -40,7 +40,7 @@ import {
 /* ============ GSAP 手动驱动（防环境节流） ============ */
 gsap.ticker.remove(gsap.updateRoot);
 
-/* ============ 数据：按歌手聚合出 25 座星系 ============ */
+/* ============ 数据：按歌手动态聚合为星系 ============ */
 interface ArtistWorld {
   idx: number;
   id: string;
@@ -602,6 +602,7 @@ warpScene.add(warpMesh);
 /* ============ 音频总线（gain 静音,分析在上游） ============ */
 class AudioBus {
   el = new Audio();
+  ambientEl = document.querySelector<HTMLAudioElement>('#sectorAmbience') ?? new Audio('/audio/ambient-sector.ogg');
   ctx: AudioContext | null = null;
   analyser: AnalyserNode | null = null;
   gain: GainNode | null = null;
@@ -610,14 +611,27 @@ class AudioBus {
   muted = false;
   bands = { bass: 0, mid: 0, high: 0 };
   private readonly fadeSeconds = 1;
+  private readonly musicGain = 0.125;
+  private readonly ambientBaseGain = 0.13;
+  private readonly ambientDuckGain = 0.026;
   private transitionId = 0;
   private transitionTimer: ReturnType<typeof setTimeout> | null = null;
   private transitionDone: (() => void) | null = null;
   private tailFadeArmed = false;
+  private ambientFadeFrame: number | null = null;
+  private ambientTailFading = false;
   private peaks: Record<string, number> = { bass: 0.24, mid: 0.2, high: 0.16 };
 
   constructor() {
     this.el.preload = 'auto';
+    this.ambientEl.preload = 'auto';
+    this.ambientEl.loop = true;
+    this.ambientEl.autoplay = true;
+    this.ambientEl.setAttribute('playsinline', '');
+    this.ambientEl.dataset.ambient = 'sector';
+    this.ambientEl.hidden = true;
+    this.ambientEl.setAttribute('aria-hidden', 'true');
+    if (!this.ambientEl.isConnected) document.body.append(this.ambientEl);
     this.el.addEventListener('timeupdate', () => {
       if (this.tailFadeArmed || !Number.isFinite(this.el.duration)) return;
       const remaining = this.el.duration - this.el.currentTime;
@@ -630,18 +644,83 @@ class AudioBus {
       this.playing = false;
       this.tailFadeArmed = false;
       this.setGainNow(0);
+      this.updateAmbientLevel(1.2);
     });
+    this.ambientEl.addEventListener('timeupdate', () => {
+      if (!Number.isFinite(this.ambientEl.duration) || this.ambientEl.duration <= 5) return;
+      const remaining = this.ambientEl.duration - this.ambientEl.currentTime;
+      if (!this.ambientTailFading && remaining <= 5) {
+        this.ambientTailFading = true;
+        this.updateAmbientLevel(Math.max(0.05, remaining));
+      } else if (this.ambientTailFading && this.ambientEl.currentTime < 1) {
+        // The native loop has wrapped back to the beginning.
+        this.ambientTailFading = false;
+        this.updateAmbientLevel(2);
+      }
+    });
+    // The HTML bootstrap starts Sector before the 3D module is ready. If that
+    // early attempt was blocked or absent, retry here; unlock() remains the
+    // final fallback for browsers that require a user gesture.
+    const bootstrapState = this.ambientEl.dataset.autoplayState;
+    if (bootstrapState !== 'pending' && bootstrapState !== 'playing') {
+      this.ambientEl.volume = 0;
+      this.startAmbient(2);
+    }
   }
 
   unlock() {
-    if (this.ctx) { this.ctx.resume(); return; }
+    if (this.ctx) {
+      void this.ctx.resume();
+      this.startAmbient(2);
+      return;
+    }
     const ctx = new AudioContext();
     const src = ctx.createMediaElementSource(this.el);
     const an = ctx.createAnalyser(); an.fftSize = 512; an.smoothingTimeConstant = 0.82;
-    const g = ctx.createGain(); g.gain.value = this.muted ? 0 : 1;
+    const g = ctx.createGain(); g.gain.value = this.muted ? 0 : this.musicGain;
     src.connect(an); an.connect(g); g.connect(ctx.destination);
     this.ctx = ctx; this.analyser = an; this.gain = g;
     this.data = new Uint8Array(an.frequencyBinCount);
+    this.startAmbient(2);
+  }
+  private ambientTarget() {
+    if (this.muted || this.ambientTailFading) return 0;
+    return this.playing && !this.el.paused ? this.ambientDuckGain : this.ambientBaseGain;
+  }
+  private updateAmbientLevel(seconds = 0.8) {
+    if (this.ambientFadeFrame !== null) cancelAnimationFrame(this.ambientFadeFrame);
+    const bootstrapFrame = (this.ambientEl as any).__sectorFadeFrame;
+    if (typeof bootstrapFrame === 'number') cancelAnimationFrame(bootstrapFrame);
+    const from = this.ambientEl.volume;
+    const target = this.ambientTarget();
+    const startedAt = performance.now();
+    const duration = Math.max(0.01, seconds) * 1000;
+    const tick = (now: number) => {
+      const p = THREE.MathUtils.clamp((now - startedAt) / duration, 0, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      this.ambientEl.volume = THREE.MathUtils.lerp(from, target, eased);
+      if (p < 1) {
+        this.ambientFadeFrame = requestAnimationFrame(tick);
+        (this.ambientEl as any).__sectorFadeFrame = this.ambientFadeFrame;
+      } else {
+        this.ambientFadeFrame = null;
+        delete (this.ambientEl as any).__sectorFadeFrame;
+      }
+    };
+    this.ambientFadeFrame = requestAnimationFrame(tick);
+    (this.ambientEl as any).__sectorFadeFrame = this.ambientFadeFrame;
+  }
+  private startAmbient(fadeSeconds = 2) {
+    const play = this.ambientEl.paused ? this.ambientEl.play() : Promise.resolve();
+    play.then(() => {
+      this.ambientEl.dataset.autoplayState = 'playing';
+      this.updateAmbientLevel(fadeSeconds);
+    }).catch((err: DOMException) => {
+      this.ambientEl.dataset.autoplayState = 'blocked';
+      // NotAllowedError is expected on browsers that require a user gesture;
+      // unlock() retries from the pointer/keyboard handler.
+      if (err.name !== 'NotAllowedError') console.warn('Sector ambience playback failed:', err);
+    });
   }
   private clearTransitionTimer() {
     if (this.transitionTimer) clearTimeout(this.transitionTimer);
@@ -672,17 +751,25 @@ class AudioBus {
     this.tailFadeArmed = false;
     this.setGainNow(0);
     this.playing = true;
+    this.updateAmbientLevel();
     if (this.ctx?.state === 'suspended') void this.ctx.resume();
     this.el.play().then(() => {
-      if (id === this.transitionId && !this.muted) this.rampTo(1);
+      if (id === this.transitionId && !this.muted) {
+        this.rampTo(this.musicGain);
+        this.updateAmbientLevel();
+      }
     }).catch((err) => {
-      if (id === this.transitionId) this.playing = false;
+      if (id === this.transitionId) {
+        this.playing = false;
+        this.updateAmbientLevel();
+      }
       console.warn('Audio playback failed:', err);
     });
   }
   setMuted(m: boolean) {
     this.muted = m;
-    this.setGainNow(m ? 0 : 1);
+    this.setGainNow(m ? 0 : this.musicGain);
+    this.updateAmbientLevel(0.25);
   }
   play(url: string) {
     const absoluteUrl = new URL(url, location.href).href;
@@ -708,6 +795,7 @@ class AudioBus {
     if (!this.el.src) {
       this.playing = false;
       this.setGainNow(0);
+      this.updateAmbientLevel();
       return Promise.resolve();
     }
     if (this.el.paused && clearSource) {
@@ -715,6 +803,7 @@ class AudioBus {
       this.setGainNow(0);
       this.el.removeAttribute('src');
       this.el.load();
+      this.updateAmbientLevel();
       return Promise.resolve();
     }
     if (!this.el.paused) this.rampTo(0);
@@ -728,6 +817,7 @@ class AudioBus {
           this.el.pause();
           this.playing = false;
           if (clearSource) { this.el.removeAttribute('src'); this.el.load(); }
+          this.updateAmbientLevel();
         }
         resolve();
       }, this.fadeSeconds * 1000);
@@ -740,10 +830,17 @@ class AudioBus {
       this.clearTransitionTimer();
       this.setGainNow(0);
       this.playing = true;
+      this.updateAmbientLevel();
       this.el.play().then(() => {
-        if (id === this.transitionId && !this.muted) this.rampTo(1);
+        if (id === this.transitionId && !this.muted) {
+          this.rampTo(this.musicGain);
+          this.updateAmbientLevel();
+        }
       }).catch((err) => {
-        if (id === this.transitionId) this.playing = false;
+        if (id === this.transitionId) {
+          this.playing = false;
+          this.updateAmbientLevel();
+        }
         console.warn('Audio playback failed:', err);
       });
     } else {
