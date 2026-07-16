@@ -117,7 +117,11 @@ function cruisePos(th: number, out: THREE.Vector3) {
     Math.sin(th) * CRUISE_R,
   );
 }
-const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.5, 60000);
+const CAMERA_FOV_DEFAULT = 58;
+const CAMERA_FOV_MIN = 28;
+const CAMERA_FOV_MAX = 82;
+const camera = new THREE.PerspectiveCamera(CAMERA_FOV_DEFAULT, innerWidth / innerHeight, 0.5, 60000);
+let targetFov = CAMERA_FOV_DEFAULT;
 // The standby frame and the first cruise frame now share one real camera
 // position. Galaxy presentation is authored against this exact viewpoint, so
 // ignition no longer jumps to a radically different angle and exposes a row
@@ -380,6 +384,14 @@ interface Planet {
   nebula: StableNebulaVisual;
   pickMesh: THREE.Mesh<THREE.SphereGeometry, THREE.MeshBasicMaterial>;
   label: HTMLDivElement;
+  labelState: {
+    x: number;
+    y: number;
+    lane: number;
+    pendingLane: number;
+    pendingSince: number;
+    active: boolean;
+  };
   r: number;
   vinylRoot: THREE.Group | null;
   vinyls: Vinyl[];
@@ -430,7 +442,11 @@ for (const a of ARTISTS) {
   document.body.appendChild(label);
 
   scene.add(root);
-  planets.push({ a, root, nebula, pickMesh, label, r, vinylRoot: null, vinyls: [] });
+  planets.push({
+    a, root, nebula, pickMesh, label,
+    labelState: { x: 0, y: 0, lane: 0, pendingLane: 0, pendingSince: 0, active: false },
+    r, vinylRoot: null, vinyls: [],
+  });
   pickPlanets.push(pickMesh);
 }
 
@@ -896,8 +912,21 @@ const el = {
   vinylTag: $('vinylTag'), vtName: $('vtName'),
   pcard: $('pcard'), pcName: $('pcName'), pcCn: $('pcCn'), pcSongs: $('pcSongs'), pcLog: $('pcLog'),
   entry: $('entry'), jumpflash: $('jumpflash'), arrival: $('arrival'), toast: $('toast'),
+  navCursor: $('navCursor'),
 };
 el.radarN.textContent = String(ARTISTS.length);
+
+const finePointer = matchMedia('(hover: hover) and (pointer: fine)');
+let customCursorEnabled = false;
+let cursorDomInteractive = false;
+function setCustomCursorEnabled(enabled: boolean) {
+  customCursorEnabled = enabled;
+  document.documentElement.classList.toggle('nav-cursor-enabled', enabled);
+  el.navCursor.classList.toggle('is-visible', false);
+  if (!enabled) document.body.style.cursor = 'default';
+}
+setCustomCursorEnabled(finePointer.matches);
+finePointer.addEventListener('change', (event) => setCustomCursorEnabled(event.matches));
 
 function setAccent(css: string) {
   document.documentElement.style.setProperty('--acc', css);
@@ -958,14 +987,15 @@ const MODE_LABEL: Record<Mode, string> = {
   orbit: '轨道 ORBIT', landing: '镜面接近 APPROACH', mirror: '时间镜面 TIME MIRROR',
   surface: '地表 SURFACE', takeoff: '起飞 ASCENT',
 };
+const FLIGHT_HINT = 'WASD\u00a0移动 · Shift\u00a0加速 · 鼠标拖动环视 · 滚轮缩放';
 const HINTS: Record<Mode, string> = {
   idle: '',
-  cruise: 'WASD 驾驶 · 拖拽环视 · 点击星系',
+  cruise: `${FLIGHT_HINT} · 点击星系`,
   approach: '正在接近歌手',
-  orbit: '点击歌曲播放 · 点击星系切换 · ESC 返回',
+  orbit: `${FLIGHT_HINT} · 点击歌曲播放 · 点击星系切换 · ESC 返回`,
   landing: '正在接近歌曲',
-  mirror: 'WASD 自由穿梭 · 点击歌曲切换 · 点击歌手直航 · ESC 返回 · P 暂停 · M 静音',
-  surface: '点击歌曲播放 · ESC 返回',
+  mirror: `${FLIGHT_HINT} · 点击歌曲切换 · 点击歌手直航 · ESC 返回 · P 暂停 · M 静音`,
+  surface: `${FLIGHT_HINT} · 点击歌曲播放 · ESC 返回`,
   takeoff: '正在返回巡航',
 };
 function setMode(m: Mode) {
@@ -1003,19 +1033,19 @@ function setMode(m: Mode) {
     );
     motionAnimate(
       el.hint,
-      { opacity: [0, 0.82], transform: ['translateX(-50%) translateY(8px)', 'translateX(-50%) translateY(0)'] },
+      { opacity: [0, 1], transform: ['translateX(-50%) translateY(8px)', 'translateX(-50%) translateY(0)'] },
       { duration: 0.72, delay: 0.08, ease: [0.22, 1, 0.36, 1] }
     );
   } else if (previousMode === 'mirror') {
     motionAnimate(
       el.hint,
-      { opacity: [0.82, 0], transform: ['translateX(-50%) translateY(0)', 'translateX(-50%) translateY(5px)'] },
+      { opacity: [1, 0], transform: ['translateX(-50%) translateY(0)', 'translateX(-50%) translateY(5px)'] },
       { duration: 0.2, ease: 'easeIn' }
     );
   } else if (m !== 'idle') {
     motionAnimate(
       el.hint,
-      { opacity: 0.82, transform: 'translateX(-50%) translateY(0)' },
+      { opacity: 1, transform: 'translateX(-50%) translateY(0)' },
       { duration: 0.26, ease: 'easeOut' }
     );
   }
@@ -1028,9 +1058,21 @@ const view = { yaw: 0, pitch: 0, down: false, px: 0, py: 0, moved: false };
 let lastMirrorPointer = { u: 0.5, v: 0.5, at: performance.now() };
 addEventListener('pointerdown', (e) => {
   view.down = true; view.moved = false; view.px = e.clientX; view.py = e.clientY;
+  if (customCursorEnabled) el.navCursor.classList.add('is-down');
 });
-addEventListener('pointerup', () => { view.down = false; });
+addEventListener('pointerup', () => {
+  view.down = false;
+  el.navCursor.classList.remove('is-down', 'is-dragging');
+  syncNavCursor();
+});
 addEventListener('pointermove', (e) => {
+  if (customCursorEnabled) {
+    el.navCursor.style.transform = `translate3d(${e.clientX}px, ${e.clientY}px, 0)`;
+    el.navCursor.classList.add('is-visible');
+  }
+  cursorDomInteractive = e.target instanceof Element && Boolean(e.target.closest(
+    'a, button, input, select, textarea, summary, [role="button"], [tabindex]:not([tabindex="-1"]), .np.show'
+  ));
   steer.tx = (e.clientX / innerWidth - 0.5) * 2;
   steer.ty = (e.clientY / innerHeight - 0.5) * 2;
   if (view.down) {
@@ -1040,8 +1082,10 @@ addEventListener('pointermove', (e) => {
       view.yaw -= dx * 0.0042;
       view.pitch = THREE.MathUtils.clamp(view.pitch - dy * 0.0034, -1.15, 1.15);
       view.px = e.clientX; view.py = e.clientY;
+      el.navCursor.classList.add('is-dragging');
     }
   }
+  syncNavCursor();
   mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   mouseMoved = true;
   if (MODE === 'mirror' && timeMirror.isOpen) {
@@ -1057,7 +1101,10 @@ addEventListener('pointermove', (e) => {
     } else timeMirror.clearPointer();
   }
 });
-addEventListener('pointerleave', () => timeMirror.clearPointer());
+addEventListener('pointerleave', () => {
+  timeMirror.clearPointer();
+  el.navCursor.classList.remove('is-visible', 'is-down', 'is-dragging');
+});
 const VIEW_UP = new THREE.Vector3(0, 1, 0);
 const lwDir = new THREE.Vector3(), lwRight = new THREE.Vector3(), lwTarget = new THREE.Vector3();
 /** 统一视线:目标方向 + 环视偏角 */
@@ -1338,6 +1385,7 @@ const WING_DEF = [
   { x: -11.5, y: -9.8, z: -40, k: 3.2, phase: 1.7, scale: 0.62 },
   { x: 10.5, y: -7.6, z: -42.5, k: 1.1, phase: 4.4, scale: 0.55 },
 ];
+const MAIN_FIGHTER_SCALE = 1.5;
 
 /* 模型原样直出 + 原生动画(Sketchfab 演示的火焰抖动就是 glTF 自带的 Take 01):
    只隐藏激光;护盾暂藏(用户要求);火焰强弱只拧作者留的 opacity 旋钮 */
@@ -1450,11 +1498,12 @@ const fighterReady = new Promise<void>((resolve) => new GLTFLoader().load('/mode
   ship.position.sub(box.getCenter(new THREE.Vector3()));
   const pivot = new THREE.Group();
   pivot.add(ship);
-  pivot.scale.setScalar(norm);
+  pivot.scale.setScalar(norm * MAIN_FIGHTER_SCALE);
   pivot.rotation.y = -Math.PI / 2; // 实测:模型机头在 -X 轴,转 -90° 后朝前(-Z)
   pivot.rotation.x = CAM_RIGS[rigIdx].rotX;
   cockpit.add(pivot);
   fighterProto = pivot;
+  registerHardBoxLabelOccluder('main-fighter', pivot, true);
   // 巡航僚机:侧后编队两架,共享材质(应援色同步换色)
   WING_DEF.forEach((def, i) => {
     const holder = new THREE.Group();
@@ -1487,6 +1536,7 @@ const fighterReady = new Promise<void>((resolve) => new GLTFLoader().load('/mode
       }
     });
     wingmen.push({ holder, lagX: 0, lagY: 0, lagF: 0, lagS: 0, k: def.k, phase: def.phase, base: { ...def }, fireMats: fm, nozzleMats: nm, fireWraps: fw });
+    registerHardBoxLabelOccluder(`wingman-${i}`, w, true);
     // 原生动画错相播放:两架不与主机同拍
     if (fighterClip) {
       const mx = new THREE.AnimationMixer(w);
@@ -1939,6 +1989,18 @@ let mouseMoved = false;
 let hoverPlanet: Planet | null = null;
 let hoverVinyl: Vinyl | null = null;
 
+function syncNavCursor() {
+  const worldInteractive = Boolean(hoverPlanet || hoverVinyl);
+  const interactive = cursorDomInteractive || worldInteractive;
+  const accent = hoverPlanet?.a.css || 'var(--acc)';
+  el.navCursor.style.setProperty('--cursor-acc', accent);
+  el.navCursor.classList.toggle('is-hover', interactive);
+  el.navCursor.dataset.state = el.navCursor.classList.contains('is-dragging')
+    ? 'dragging'
+    : interactive ? 'hover' : 'normal';
+  document.body.style.cursor = customCursorEnabled ? 'none' : interactive ? 'pointer' : 'default';
+}
+
 function pick() {
   if (!mouseMoved) return;
   mouseMoved = false;
@@ -1946,7 +2008,6 @@ function pick() {
   if (MODE === 'cruise') {
     const hits = raycaster.intersectObjects(pickPlanets, false);
     hoverPlanet = hits.length ? planets[hits[0].object.userData.planetIdx] : null;
-    document.body.style.cursor = hoverPlanet ? 'pointer' : 'default';
   } else if ((MODE === 'orbit' || MODE === 'surface' || MODE === 'mirror') && focus) {
     // 歌曲优先(orbit/mirror);没中再测其他星系(跃迁目标)
     hoverVinyl = null;
@@ -1960,11 +2021,12 @@ function pick() {
       const ph = raycaster.intersectObjects(pickPlanets.filter((m) => m !== focus!.pickMesh), false);
       hoverPlanet = ph.length ? planets[ph[0].object.userData.planetIdx] : null;
     }
-    document.body.style.cursor = hoverVinyl || hoverPlanet ? 'pointer' : 'default';
     if (hoverVinyl) ensureTrack(hoverVinyl);
   } else {
-    document.body.style.cursor = 'default';
+    hoverVinyl = null;
+    hoverPlanet = null;
   }
+  syncNavCursor();
 }
 
 addEventListener('click', (e) => {
@@ -1990,7 +2052,12 @@ addEventListener('click', (e) => {
   else if (hoverPlanet) hyperjumpTo(hoverPlanet);
 });
 addEventListener('dblclick', () => resetView(0.7)); // 双击回正视线
-addEventListener('wheel', () => { /* 已移除模式切换,全程 WASD/鼠标控制 */ }, { passive: true });
+addEventListener('wheel', (e) => {
+  e.preventDefault();
+  // 统一为像素增量，兼容鼠标滚轮与触控板；向上放大，向下缩小。
+  const delta = e.deltaY * (e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? innerHeight : 1);
+  targetFov = THREE.MathUtils.clamp(targetFov + delta * 0.035, CAMERA_FOV_MIN, CAMERA_FOV_MAX);
+}, { passive: false });
 const WASD = ['KeyW', 'KeyA', 'KeyS', 'KeyD'];
 addEventListener('keydown', (e) => {
   drive.boost = e.shiftKey;
@@ -2081,6 +2148,382 @@ function projectTo(elm: HTMLElement, world: THREE.Vector3, ox: number, oy: numbe
   return true;
 }
 
+interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
+type LabelOccluderKind = 'hard' | 'soft';
+
+interface LabelOccluder {
+  id: string;
+  kind: LabelOccluderKind;
+  owner: Planet | null;
+  polygon: ScreenPoint[] | null;
+  depth: number;
+  active: boolean;
+  inverse?: THREE.Matrix4;
+  radius?: number;
+  halfThickness?: number;
+}
+
+interface HardBoxLabelOccluder extends LabelOccluder {
+  kind: 'hard';
+  root: THREE.Object3D;
+  localBounds: THREE.Box3;
+  cameraAttached: boolean;
+}
+
+const LABEL_NEBULA_SEGMENTS = 16;
+const LABEL_NEBULA_RADIUS_SCALE = 1.16;
+const LABEL_HARD_PADDING = 3;
+const hardBoxLabelOccluders: HardBoxLabelOccluder[] = [];
+const activeLabelOccluders: LabelOccluder[] = [];
+const nebulaLabelOccluders: LabelOccluder[] = planets.map((planet) => ({
+  id: `nebula-${planet.a.id}`,
+  kind: 'soft',
+  owner: planet,
+  polygon: Array.from({ length: LABEL_NEBULA_SEGMENTS }, () => ({ x: 0, y: 0 })),
+  depth: 0,
+  active: false,
+  inverse: new THREE.Matrix4(),
+  radius: planet.r * LABEL_NEBULA_RADIUS_SCALE,
+  halfThickness: planet.r * 0.38,
+}));
+const mirrorLabelOccluder: LabelOccluder = {
+  id: 'time-mirror',
+  kind: 'hard',
+  owner: null,
+  polygon: Array.from({ length: 4 }, () => ({ x: 0, y: 0 })),
+  depth: 0,
+  active: false,
+};
+
+const labelOcclusionLocal = new THREE.Vector3();
+const labelOcclusionWorld = new THREE.Vector3();
+const labelOcclusionNdc = new THREE.Vector3();
+const labelOcclusionRayPoint = new THREE.Vector3();
+const labelOcclusionRayOrigin = new THREE.Vector3();
+const labelOcclusionRayEnd = new THREE.Vector3();
+const labelOcclusionRayDirection = new THREE.Vector3();
+const labelOcclusionRootInverse = new THREE.Matrix4();
+const labelOcclusionObjectMatrix = new THREE.Matrix4();
+const labelOcclusionMeshMatrix = new THREE.Matrix4();
+const labelOcclusionAttachedMatrix = new THREE.Matrix4();
+const labelOcclusionCenter = new THREE.Vector3();
+const labelTargetOffset = new THREE.Vector3();
+const labelCameraForward = new THREE.Vector3();
+const labelArtistWorld = new THREE.Vector3();
+const labelCamera = camera.clone();
+const ARTIST_LABEL_LANES = [0, -20, 20, -40, 40, -60, 60, -80, 80] as const;
+const ARTIST_LABEL_SWITCH_DELAY = 0.15;
+const ARTIST_LABEL_FAR_START = 5200;
+const ARTIST_LABEL_FAR_END = 12000;
+const ARTIST_LABEL_FAR_COUNT = 28;
+
+function pointInPolygon(x: number, y: number, polygon: ScreenPoint[]) {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    const crosses = (a.y > y) !== (b.y > y)
+      && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x;
+    if (crosses) inside = !inside;
+  }
+  return inside;
+}
+
+function objectHierarchyVisible(object: THREE.Object3D) {
+  let current: THREE.Object3D | null = object;
+  while (current) {
+    if (!current.visible) return false;
+    current = current.parent;
+  }
+  return true;
+}
+
+function expandBoundsFromMesh(
+  bounds: THREE.Box3,
+  mesh: THREE.Mesh,
+  rootInverse: THREE.Matrix4,
+) {
+  mesh.geometry.computeBoundingBox();
+  const box = mesh.geometry.boundingBox;
+  if (!box) return;
+  labelOcclusionMeshMatrix.multiplyMatrices(rootInverse, mesh.matrixWorld);
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) {
+        labelOcclusionLocal.set(x, y, z).applyMatrix4(labelOcclusionMeshMatrix);
+        bounds.expandByPoint(labelOcclusionLocal);
+      }
+    }
+  }
+}
+
+/** Register a low-cost hull proxy; flames, lasers and shields never occlude text. */
+function registerHardBoxLabelOccluder(
+  id: string,
+  root: THREE.Object3D,
+  cameraAttached: boolean,
+) {
+  root.updateWorldMatrix(true, true);
+  labelOcclusionRootInverse.copy(root.matrixWorld).invert();
+  const localBounds = new THREE.Box3().makeEmpty();
+  root.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.visible) return;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const names = materials.map((material) => material?.name?.toLowerCase() || '').join(' ');
+    if (names.includes('fire') || names.includes('laser') || names.includes('shield')) return;
+    expandBoundsFromMesh(localBounds, mesh, labelOcclusionRootInverse);
+  });
+  if (localBounds.isEmpty()) return;
+  hardBoxLabelOccluders.push({
+    id,
+    kind: 'hard',
+    owner: null,
+    polygon: null,
+    depth: 0,
+    active: false,
+    root,
+    localBounds,
+    cameraAttached,
+  });
+}
+
+function convexHull(points: ScreenPoint[]) {
+  if (points.length <= 3) return points.map((point) => ({ ...point }));
+  const sorted = points.map((point) => ({ ...point })).sort((a, b) => a.x - b.x || a.y - b.y);
+  const cross = (origin: ScreenPoint, a: ScreenPoint, b: ScreenPoint) =>
+    (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+  const lower: ScreenPoint[] = [];
+  for (const point of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+    lower.push(point);
+  }
+  const upper: ScreenPoint[] = [];
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const point = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+    upper.push(point);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function padPolygon(polygon: ScreenPoint[], padding: number) {
+  if (!polygon.length || padding <= 0) return polygon;
+  const centerX = polygon.reduce((sum, point) => sum + point.x, 0) / polygon.length;
+  const centerY = polygon.reduce((sum, point) => sum + point.y, 0) / polygon.length;
+  polygon.forEach((point) => {
+    const dx = point.x - centerX;
+    const dy = point.y - centerY;
+    const length = Math.max(1, Math.hypot(dx, dy));
+    point.x += (dx / length) * padding;
+    point.y += (dy / length) * padding;
+  });
+  return polygon;
+}
+
+function updateHardBoxLabelOccluder(occluder: HardBoxLabelOccluder) {
+  occluder.active = false;
+  if (!objectHierarchyVisible(occluder.root)) return;
+  occluder.root.updateWorldMatrix(true, false);
+  if (occluder.cameraAttached) {
+    labelOcclusionAttachedMatrix.multiplyMatrices(labelCamera.matrixWorld, camera.matrixWorldInverse);
+    labelOcclusionObjectMatrix.multiplyMatrices(labelOcclusionAttachedMatrix, occluder.root.matrixWorld);
+  } else {
+    labelOcclusionObjectMatrix.copy(occluder.root.matrixWorld);
+  }
+
+  const points: ScreenPoint[] = [];
+  const { min, max } = occluder.localBounds;
+  for (const x of [min.x, max.x]) {
+    for (const y of [min.y, max.y]) {
+      for (const z of [min.z, max.z]) {
+        labelOcclusionWorld.set(x, y, z).applyMatrix4(labelOcclusionObjectMatrix);
+        labelOcclusionNdc.copy(labelOcclusionWorld).project(labelCamera);
+        if (labelOcclusionNdc.z < -1 || labelOcclusionNdc.z > 1) return;
+        points.push({
+          x: (labelOcclusionNdc.x * 0.5 + 0.5) * innerWidth,
+          y: (-labelOcclusionNdc.y * 0.5 + 0.5) * innerHeight,
+        });
+      }
+    }
+  }
+  occluder.polygon = padPolygon(convexHull(points), LABEL_HARD_PADDING);
+  occluder.localBounds.getCenter(labelOcclusionCenter).applyMatrix4(labelOcclusionObjectMatrix);
+  occluder.depth = labelTargetOffset.copy(labelOcclusionCenter)
+    .sub(labelCamera.position)
+    .dot(labelCameraForward);
+  occluder.active = occluder.depth > 0 && !!occluder.polygon.length;
+}
+
+function updateNebulaLabelOccluder(occluder: LabelOccluder, planet: Planet) {
+  occluder.active = false;
+  planet.nebula.group.updateWorldMatrix(true, false);
+  planet.root.getWorldPosition(labelOcclusionCenter);
+  occluder.depth = labelTargetOffset.copy(labelOcclusionCenter)
+    .sub(labelCamera.position)
+    .dot(labelCameraForward);
+  if (occluder.depth <= 0) return;
+  occluder.inverse!.copy(planet.nebula.group.matrixWorld).invert();
+
+  const polygon = occluder.polygon!;
+  for (let i = 0; i < LABEL_NEBULA_SEGMENTS; i++) {
+    const angle = (i / LABEL_NEBULA_SEGMENTS) * Math.PI * 2;
+    labelOcclusionLocal.set(
+      Math.cos(angle) * occluder.radius!,
+      0,
+      Math.sin(angle) * occluder.radius!,
+    );
+    labelOcclusionWorld.copy(labelOcclusionLocal);
+    planet.nebula.group.localToWorld(labelOcclusionWorld);
+    labelOcclusionNdc.copy(labelOcclusionWorld).project(labelCamera);
+    if (labelOcclusionNdc.z < -1 || labelOcclusionNdc.z > 1) {
+      occluder.polygon = null;
+      occluder.active = true;
+      return;
+    }
+    polygon[i].x = (labelOcclusionNdc.x * 0.5 + 0.5) * innerWidth;
+    polygon[i].y = (-labelOcclusionNdc.y * 0.5 + 0.5) * innerHeight;
+  }
+  occluder.active = true;
+}
+
+function updateMirrorLabelOccluder() {
+  mirrorLabelOccluder.active = false;
+  if (!timeMirror.group.visible) return;
+  timeMirror.group.updateWorldMatrix(true, false);
+  const polygon = mirrorLabelOccluder.polygon!;
+  const corners = [
+    [-17, -15], [17, -15], [17, 15], [-17, 15],
+  ] as const;
+  for (let i = 0; i < corners.length; i++) {
+    labelOcclusionWorld.set(corners[i][0], corners[i][1], 0).applyMatrix4(timeMirror.group.matrixWorld);
+    labelOcclusionNdc.copy(labelOcclusionWorld).project(labelCamera);
+    if (labelOcclusionNdc.z < -1 || labelOcclusionNdc.z > 1) return;
+    polygon[i].x = (labelOcclusionNdc.x * 0.5 + 0.5) * innerWidth;
+    polygon[i].y = (-labelOcclusionNdc.y * 0.5 + 0.5) * innerHeight;
+  }
+  timeMirror.group.getWorldPosition(labelOcclusionCenter);
+  mirrorLabelOccluder.depth = labelTargetOffset.copy(labelOcclusionCenter)
+    .sub(labelCamera.position)
+    .dot(labelCameraForward);
+  mirrorLabelOccluder.active = mirrorLabelOccluder.depth > 0;
+}
+
+function updateLabelOccluderRegistry() {
+  activeLabelOccluders.length = 0;
+  labelCamera.getWorldDirection(labelCameraForward);
+  camera.updateMatrixWorld(true);
+
+  hardBoxLabelOccluders.forEach((occluder) => {
+    updateHardBoxLabelOccluder(occluder);
+    if (occluder.active) activeLabelOccluders.push(occluder);
+  });
+  nebulaLabelOccluders.forEach((occluder, index) => {
+    // A near-plane crossing temporarily switches this entry to ray/ellipsoid
+    // testing; restore its reusable polygon on the next normal frame.
+    if (!occluder.polygon) {
+      occluder.polygon = Array.from({ length: LABEL_NEBULA_SEGMENTS }, () => ({ x: 0, y: 0 }));
+    }
+    updateNebulaLabelOccluder(occluder, planets[index]);
+    if (occluder.active) activeLabelOccluders.push(occluder);
+  });
+  updateMirrorLabelOccluder();
+  if (mirrorLabelOccluder.active) activeLabelOccluders.push(mirrorLabelOccluder);
+  activeLabelOccluders.sort((a, b) => a.depth - b.depth);
+}
+
+function screenRayIntersectsOccluder(
+  occluder: LabelOccluder,
+  x: number,
+  y: number,
+  maxDistance: number,
+) {
+  if (!occluder.inverse || !occluder.radius || !occluder.halfThickness) return false;
+  labelOcclusionRayPoint.set(
+    (x / innerWidth) * 2 - 1,
+    -(y / innerHeight) * 2 + 1,
+    0.5,
+  ).unproject(labelCamera);
+  labelOcclusionRayDirection.copy(labelOcclusionRayPoint)
+    .sub(labelCamera.position)
+    .normalize();
+  labelOcclusionRayOrigin.copy(labelCamera.position).applyMatrix4(occluder.inverse);
+  labelOcclusionRayEnd.copy(labelCamera.position)
+    .add(labelOcclusionRayDirection)
+    .applyMatrix4(occluder.inverse);
+  labelOcclusionRayDirection.copy(labelOcclusionRayEnd).sub(labelOcclusionRayOrigin);
+  labelOcclusionRayOrigin.set(
+    labelOcclusionRayOrigin.x / occluder.radius,
+    labelOcclusionRayOrigin.y / occluder.halfThickness,
+    labelOcclusionRayOrigin.z / occluder.radius,
+  );
+  labelOcclusionRayDirection.set(
+    labelOcclusionRayDirection.x / occluder.radius,
+    labelOcclusionRayDirection.y / occluder.halfThickness,
+    labelOcclusionRayDirection.z / occluder.radius,
+  );
+
+  const a = labelOcclusionRayDirection.lengthSq();
+  const b = 2 * labelOcclusionRayOrigin.dot(labelOcclusionRayDirection);
+  const c = labelOcclusionRayOrigin.lengthSq() - 1;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0 || a < 1e-8) return false;
+  if (c <= 0) return maxDistance > 0;
+  const root = Math.sqrt(discriminant);
+  const near = (-b - root) / (2 * a);
+  const far = (-b + root) / (2 * a);
+  const hitDistance = near >= 0 ? near : far;
+  return hitDistance >= 0 && hitDistance < maxDistance;
+}
+
+function labelIntersectsOccluder(
+  occluder: LabelOccluder,
+  centerX: number,
+  topY: number,
+  halfWidth: number,
+  height: number,
+  maxDistance: number,
+) {
+  const centerY = topY + height * 0.5;
+  const covered = (x: number, y: number) => occluder.polygon
+    ? pointInPolygon(x, y, occluder.polygon)
+    : screenRayIntersectsOccluder(occluder, x, y, maxDistance);
+  const centerCovered = covered(centerX, centerY);
+  const cornerCoverage = [
+    covered(centerX - halfWidth, topY),
+    covered(centerX + halfWidth, topY),
+    covered(centerX - halfWidth, topY + height),
+    covered(centerX + halfWidth, topY + height),
+  ].filter(Boolean).length;
+  const occluderInsideLabel = !!occluder.polygon?.some(
+      (point) => Math.abs(point.x - centerX) <= halfWidth && point.y >= topY && point.y <= topY + height,
+  );
+  if (occluder.kind === 'hard') return centerCovered || cornerCoverage > 0 || occluderInsideLabel;
+  return centerCovered || cornerCoverage >= 2 || occluderInsideLabel;
+}
+
+function labelOccludedByForeground(
+  centerX: number,
+  topY: number,
+  halfWidth: number,
+  height: number,
+  targetDepth: number,
+  targetDistance: number,
+  owner: Planet | null,
+) {
+  return activeLabelOccluders.some((occluder) => {
+    if (!occluder.active || occluder.owner === owner) return false;
+    if (occluder.depth >= targetDepth - 1) return false;
+    return labelIntersectsOccluder(occluder, centerX, topY, halfWidth, height, targetDistance);
+  });
+}
+
 /* ============ 主循环 ============ */
 const clock = new THREE.Timer();
 let elapsed = 0;
@@ -2110,6 +2553,12 @@ function tick() {
 
   steer.x += (steer.tx - steer.x) * (1 - Math.exp(-dt * 4.2));
   steer.y += (steer.ty - steer.y) * (1 - Math.exp(-dt * 4.2));
+
+  const nextFov = THREE.MathUtils.lerp(camera.fov, targetFov, 1 - Math.exp(-dt * 10));
+  if (Math.abs(nextFov - camera.fov) > 0.001) {
+    camera.fov = nextFov;
+    camera.updateProjectionMatrix();
+  }
 
   // 点击歌手后的 launch 贝塞尔在前 45% 先向后拉；震动只跟随这段，
   // 到折返俯冲前自然归零。点击歌曲的降落 glide 不触发震动。
@@ -2190,6 +2639,9 @@ function tick() {
     tmpV2.x += steer.x * p.r * 0.24; tmpV2.y += -steer.y * p.r * 0.2;
     lookWithView(tmpV2);
   }
+  // DOM 标签使用震动前的相机。3D 场景继续保留点火抖动，但文字保持 HUD 稳定。
+  labelCamera.copy(camera, false);
+  labelCamera.updateMatrixWorld(true);
   if (shake > 0.0005) {
     camera.position.x += (Math.random() - 0.5) * shake * 6;
     camera.position.y += (Math.random() - 0.5) * shake * 6;
@@ -2223,10 +2675,12 @@ function tick() {
   } : { intensity: 0, bass: 0, mids: 0, highs: 0 }, camera);
   // Playback keeps the complete artist field lit. Flying away from the mirror
   // may fade the mirror itself, but never turns the other singer nebulae off.
+  updateLabelOccluderRegistry();
 
   // ---- 歌曲亮星：在完整星云盘面稳定散布，并与星云保持同一转速 ----
   if (focus?.vinylRoot) {
     const labelSlots: Array<{ x: number; y: number }> = [];
+    const songLabelsActive = MODE === 'orbit' || MODE === 'landing' || MODE === 'mirror';
     for (const v of focus.vinyls) {
       // The selected light becomes the world-space mirror anchor. Freeze only
       // that hidden node while landing/playing; every other song keeps moving.
@@ -2238,23 +2692,54 @@ function tick() {
       v.disc.scale.lerp(tmpV2.setScalar(s), 1 - Math.exp(-dt * 9));
       (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 1 : 0.9;
 
-      const showLabel = MODE === 'orbit' && focus.vinylRoot.visible;
-      // Mirror mode keeps labels visually hidden, but still projects their DOM
-      // anchors every frame so pointer hit testing and accessibility tooling
-      // stay aligned with the moving song stars during playback.
-      const shouldProjectLabel = (MODE === 'orbit' || MODE === 'mirror') && focus.vinylRoot.visible;
+      // The mirror and now-playing card already name the selected song. Every
+      // other visible song stays labelled throughout approach and playback.
+      const showLabel = songLabelsActive && focus.vinylRoot.visible && v !== mirrorVinyl;
       const labelX = ((v.index % 3) - 1) * 18;
       const labelY = v.index % 2 ? 18 : -32;
       v.group.getWorldPosition(tmpV3);
-      tmpV.copy(tmpV3).project(camera);
+      const songTargetDistance = labelCamera.position.distanceTo(tmpV3);
+      const songTargetDepth = labelTargetOffset.copy(tmpV3)
+        .sub(labelCamera.position)
+        .dot(labelCameraForward);
+      tmpV.copy(tmpV3).project(labelCamera);
       const screenX = (tmpV.x * 0.5 + 0.5) * innerWidth + labelX;
-      const screenY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelY;
-      // Keep the orbital chart readable: retain all bright stars, but suppress
-      // labels whose screen boxes collide. Hover always reveals the exact song.
-      const collides = labelSlots.some((slot) => Math.abs(slot.x - screenX) < 108 && Math.abs(slot.y - screenY) < 19);
-      const labelProjected = shouldProjectLabel && projectTo(v.label, tmpV3, labelX, labelY);
-      const labelVisible = showLabel && (!collides || isHover) && labelProjected;
-      if (labelVisible) labelSlots.push({ x: screenX, y: screenY });
+      const baseScreenY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelY;
+      const inFrame = tmpV.z >= -1 && tmpV.z <= 1
+        && screenX >= 62 && screenX <= innerWidth - 62
+        && baseScreenY >= 8 && baseScreenY <= innerHeight - 24;
+      let screenY = THREE.MathUtils.clamp(baseScreenY, 8, innerHeight - 24);
+      if (showLabel && inFrame) {
+        // Labels remain present: collisions move to the nearest free line
+        // instead of making a song disappear from the chart.
+        for (const dy of [0, -20, 20, -40, 40, -60, 60]) {
+          const candidateY = THREE.MathUtils.clamp(baseScreenY + dy, 8, innerHeight - 24);
+          const collides = labelSlots.some(
+            (slot) => Math.abs(slot.x - screenX) < 112 && Math.abs(slot.y - candidateY) < 19,
+          );
+          if (!collides) {
+            screenY = candidateY;
+            break;
+          }
+        }
+      }
+      let labelVisible = showLabel && inFrame;
+      if (
+        labelVisible
+        && labelOccludedByForeground(
+          screenX,
+          screenY,
+          62,
+          16,
+          songTargetDepth,
+          songTargetDistance,
+          focus,
+        )
+      ) labelVisible = false;
+      if (labelVisible) {
+        labelSlots.push({ x: screenX, y: screenY });
+        v.label.style.transform = `translate(${screenX.toFixed(1)}px, ${screenY.toFixed(1)}px)`;
+      }
       v.label.style.opacity = labelVisible ? (isHover ? '1' : '0.82') : '0';
       v.label.setAttribute('aria-hidden', String(!labelVisible));
     }
@@ -2286,11 +2771,20 @@ function tick() {
   if (fullBurn) { tSize = 1; tSpeed = 1.25; tOp = 0.78; }
   else if (wasdActive) { tSize = 0.78; tSpeed = 0.72; tOp = 0.52; }
   else { tSize = 0.2; tSpeed = 0.2; tOp = 0.18; }
+  // 主机放大后，尾焰不再同比放大：飞入/Shift 仍强于普通驾驶，
+  // 但长度、透明度和自发光都更克制；僚机继续沿用原编队档位。
+  const mainSize = fullBurn ? 0.78 : wasdActive ? 0.62 : tSize;
+  const mainOp = fullBurn ? 0.52 : wasdActive ? 0.42 : tOp;
+  const mainEmissive = fullBurn ? 1.3 : wasdActive ? 1.15 : 1.7;
   const k6 = 1 - Math.exp(-dt * 5);
-  for (const w of fireWraps) w.scale.setScalar(w.scale.x + (tSize - w.scale.x) * k6);
+  for (const w of fireWraps) w.scale.setScalar(w.scale.x + (mainSize - w.scale.x) * k6);
   for (const mx of shipMixers) { mx.timeScale += (tSpeed - mx.timeScale) * k6; mx.update(dt); }
-  for (const fm of fireMats) fm.opacity += (tOp - fm.opacity) * k6;
-  nozzleMat.opacity = 0.34 + (tOp - 0.18) * 1.25; // 金黄更浓
+  for (const fm of fireMats) {
+    fm.opacity += (mainOp - fm.opacity) * k6;
+    fm.emissiveIntensity += (mainEmissive - fm.emissiveIntensity) * k6;
+  }
+  // 喷口橙色爆发光晕独立保留原档位，不跟随收敛后的主尾焰透明度。
+  nozzleMat.opacity = 0.34 + (tOp - 0.18) * 1.25;
 
   // ---- 火焰擂台驱动 ----
   if (COMPARE) {
@@ -2378,36 +2872,79 @@ function tick() {
 
   // ---- HUD ----
   pick();
-  // Every on-screen singer stays named. After entering an orbit, only the
-  // current singer steps aside; all other galaxies remain readable targets.
+  // 世界标签统一接受近景星云、飞船编队和时间镜面的深度遮挡。
+  // 飞到极远景时按固定排行渐隐低优先级名字，避免 55 个标签挤进同一小片区域。
+  // 排行和透明度阈值都是确定性的，因此相机轻微移动不会让名字随机闪烁。
+  const farDensity = THREE.MathUtils.smoothstep(
+    labelCamera.position.length(),
+    ARTIST_LABEL_FAR_START,
+    ARTIST_LABEL_FAR_END,
+  );
+  const densityCutoff = THREE.MathUtils.lerp(planets.length + 4, ARTIST_LABEL_FAR_COUNT, farDensity);
+  const labelFollow = 1 - Math.exp(-dt * (flight?.mode === 'launch' ? 8 : 14));
   const artistLabelSlots: Array<{ x: number; y: number }> = [];
   for (const p of planets) {
-    tmpV.copy(p.root.position).project(camera);
+    tmpV.copy(p.root.position).project(labelCamera);
     const inFrame = tmpV.z < 1 && tmpV.x > -1.08 && tmpV.x < 1.08 && tmpV.y > -1.08 && tmpV.y < 1.08;
-    const visible = MODE !== 'idle' && p !== focus && inFrame;
-    if (visible) {
-      const distance = camera.position.distanceTo(p.root.position);
-      const focalPx = innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+    const rank = galaxySizeRank.get(p.a.id) ?? planets.length;
+    const densityAlpha = p === hoverPlanet
+      ? 1
+      : 1 - THREE.MathUtils.smoothstep(rank, densityCutoff - 5, densityCutoff + 1);
+    const layoutActive = MODE !== 'idle' && p !== focus && inFrame && densityAlpha > 0.02;
+    let visible = layoutActive;
+    if (layoutActive) {
+      p.root.getWorldPosition(labelArtistWorld);
+      const distance = labelCamera.position.distanceTo(labelArtistWorld);
+      const artistDepth = labelTargetOffset.copy(labelArtistWorld)
+        .sub(labelCamera.position)
+        .dot(labelCameraForward);
+      const focalPx = innerHeight / (2 * Math.tan(THREE.MathUtils.degToRad(labelCamera.fov * 0.5)));
       const labelOffsetY = THREE.MathUtils.clamp((p.r / Math.max(distance, 1)) * focalPx * 0.72 + 12, 20, 92);
       const baseX = THREE.MathUtils.clamp((tmpV.x * 0.5 + 0.5) * innerWidth, 88, innerWidth - 88);
       const baseY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelOffsetY;
-      let labelY = baseY;
-      // Names never disappear to solve a collision. Nearby labels instead
-      // take the nearest free line above/below their own nebula.
-      for (const dy of [0, -20, 20, -40, 40, -60, 60, -80, 80]) {
-        const candidateY = baseY + dy;
-        const collides = artistLabelSlots.some(
-          (slot) => Math.abs(slot.x - baseX) < 108 && Math.abs(slot.y - candidateY) < 18,
-        );
-        if (!collides) {
-          labelY = candidateY;
-          break;
+      const state = p.labelState;
+      const laneY = (lane: number) => baseY + lane;
+      const laneCollides = (lane: number) => artistLabelSlots.some(
+        (slot) => Math.abs(slot.x - baseX) < 108 && Math.abs(slot.y - laneY(lane)) < 18,
+      );
+      const findFreeLane = () => ARTIST_LABEL_LANES.find((lane) => !laneCollides(lane)) ?? state.lane;
+
+      if (!state.active) {
+        state.lane = findFreeLane();
+        state.pendingLane = state.lane;
+        state.pendingSince = t;
+        state.x = baseX;
+        state.y = laneY(state.lane);
+      } else if (laneCollides(state.lane)) {
+        const desiredLane = findFreeLane();
+        if (desiredLane !== state.lane) {
+          if (state.pendingLane !== desiredLane) {
+            state.pendingLane = desiredLane;
+            state.pendingSince = t;
+          } else if (t - state.pendingSince >= ARTIST_LABEL_SWITCH_DELAY) {
+            state.lane = desiredLane;
+            state.pendingSince = t;
+          }
         }
+      } else {
+        state.pendingLane = state.lane;
+        state.pendingSince = t;
       }
-      artistLabelSlots.push({ x: baseX, y: labelY });
-      p.label.style.transform = `translate(${baseX.toFixed(1)}px, ${labelY.toFixed(1)}px)`;
+
+      const targetY = laneY(state.lane);
+      state.x += (baseX - state.x) * labelFollow;
+      state.y += (targetY - state.y) * labelFollow;
+      p.label.style.transform = `translate3d(${state.x.toFixed(1)}px, ${state.y.toFixed(1)}px, 0)`;
+
+      if (labelOccludedByForeground(state.x, state.y, 88, 18, artistDepth, distance, p)) visible = false;
+
+      // Occluded names do not consume a collision slot, so a visible neighbor
+      // can still settle on the closest line to its own galaxy.
+      if (visible) artistLabelSlots.push({ x: state.x, y: state.y });
     }
-    p.label.style.opacity = visible ? (p === hoverPlanet ? '1' : '0.84') : '0';
+    p.labelState.active = layoutActive;
+    const labelOpacity = visible ? (p === hoverPlanet ? 1 : 0.84 * densityAlpha) : 0;
+    p.label.style.opacity = labelOpacity.toFixed(3);
     p.label.setAttribute('aria-hidden', String(!visible));
   }
   if ((MODE === 'cruise' || MODE === 'orbit' || MODE === 'mirror') && hoverPlanet) {
