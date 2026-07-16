@@ -1129,7 +1129,7 @@ const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE
  *    |P1-P0| 巨长 → 瞬间点火急退,|P3-P2| 短 → 漫长优雅的减速滑入;
  *    视线与路径解耦,每帧指数收敛甩向目标(参考站 0.937/帧@60fps),
  *    后拉段死死盯住目标 → 目标在画面里急速缩小,俯冲段再迎面放大。 */
-const PULL_BACK = 6200; // 后拉常数:主导 P1 外推量,弧顶拉到 ~5000 高空俯瞰整个星系带,近侧目标可拉到起始距离近 3 倍
+const PULL_BACK = 9000; // 后拉常数:主导 P1 外推量,进一步拉大第一阶段的后退幅度和飞行距离
 interface Flight {
   curve: THREE.CubicBezierCurve3; look0: THREE.Vector3; look1: THREE.Vector3; t: number; roll: number;
   mode: 'glide' | 'launch'; end: THREE.Vector3; tCrop: number;
