@@ -27,7 +27,12 @@ import { gsap } from 'gsap';
 import { animate as motionAnimate } from 'motion/mini';
 import { MUSIC_NODES } from '../data';
 import { MusicNode } from '../types';
-import { fetchTrackInfo, TrackInfo } from '../engine/itunes';
+import {
+  fetchTrackInfo,
+  prefetchArtistTrackInfos,
+  trackLookupFailed,
+  TrackInfo,
+} from '../engine/itunes';
 import { TimeMirror } from '../engine/TimeMirror';
 import { paletteFor } from '../engine/palette';
 import {
@@ -1258,11 +1263,16 @@ function buildVinyls(p: Planet) {
   });
   p.vinylRoot = root;
   p.nebula.group.add(root);
-  // Prepare every preview URL during the approach so the eventual play() call
-  // can run synchronously inside the user's song click (autoplay-safe).
-  p.vinyls.forEach((v, i) => setTimeout(() => { void ensureTrackInfo(v); }, i * 120));
-  // 预取前 6 首封面，其余悬停/打开镜面时再取。
-  p.vinyls.slice(0, 6).forEach((v, i) => setTimeout(() => ensureTrack(v), i * 260));
+  // One artist-catalog request prepares all preview URLs without triggering
+  // twelve Apple Search API calls in a burst. Covers are still fetched lazily.
+  void prefetchArtistTrackInfos(p.vinyls.map((v) => v.node)).then((byId) => {
+    if (p.vinylRoot !== root) return;
+    p.vinyls.forEach((v) => { v.info = byId.get(v.node.id) ?? null; });
+    p.vinyls
+      .filter((v) => v.info?.artworkUrl || v.info?.artworkUrlSmall)
+      .slice(0, 6)
+      .forEach((v, i) => setTimeout(() => { void ensureTrack(v); }, i * 260));
+  });
 }
 function disposeVinyls(p: Planet) {
   if (!p.vinylRoot) return;
@@ -1781,6 +1791,12 @@ function queueMirrorSongPlayback(v: Vinyl, expectedEpoch: number, fadeReady: Pro
   return trackReady;
 }
 
+function toastTrackUnavailable(v: Vinyl) {
+  toast(trackLookupFailed(v.node)
+    ? `${v.node.name} · 试听加载失败，请稍后重试`
+    : `${v.node.name} · 暂无试听`);
+}
+
 async function playMirrorSong(v: Vinyl, expectedEpoch: number) {
   if (v.coverState !== 2) await ensureTrack(v);
   if (expectedEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v) return;
@@ -1790,7 +1806,7 @@ async function playMirrorSong(v: Vinyl, expectedEpoch: number) {
   if (v.info?.previewUrl) {
     audio.play(v.info.previewUrl);
   } else {
-    toast(`${v.node.name} · 暂无试听`);
+    toastTrackUnavailable(v);
   }
 }
 
@@ -1938,7 +1954,7 @@ async function playVinyl(v: Vinyl) {
   if (v.info?.previewUrl) {
     audio.play(v.info.previewUrl);
   } else {
-    toast(`${v.node.name} · 暂无试听`);
+    toastTrackUnavailable(v);
   }
 }
 

@@ -127,6 +127,73 @@ Respond strictly in JSON format matching the schema.`;
 
   // === iTunes proxy (cover art + 30s previews, avoids browser CORS) ===
 
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  let itunesRequestTail: Promise<void> = Promise.resolve();
+  let itunesLastRequestAt = 0;
+
+  // Apple throttles short request bursts aggressively. Serialize Search API
+  // calls and leave a small gap between them; binary CDN requests stay fast.
+  const enqueueItunesRequest = <T>(task: () => Promise<T>): Promise<T> => {
+    const run = itunesRequestTail.then(async () => {
+      const gap = Math.max(0, 400 - (Date.now() - itunesLastRequestAt));
+      if (gap) await delay(gap);
+      try {
+        return await task();
+      } finally {
+        itunesLastRequestAt = Date.now();
+      }
+    });
+    itunesRequestTail = run.then(() => undefined, () => undefined);
+    return run;
+  };
+
+  const fetchItunesJson = async (url: string): Promise<any> => {
+    let lastError: any = null;
+    const backoffs = [0, 1200, 3500, 8000];
+    for (let attempt = 0; attempt < backoffs.length; attempt++) {
+      if (backoffs[attempt]) await delay(backoffs[attempt]);
+      try {
+        return await enqueueItunesRequest(async () => {
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 12000);
+          try {
+            const resp = await fetch(url, {
+              signal: ctrl.signal,
+              headers: { 'User-Agent': 'K-Sound-Galaxy/1.0' },
+            });
+            if (!resp.ok) {
+              const error: any = new Error(`iTunes responded ${resp.status}`);
+              error.status = resp.status;
+              error.retryAfter = Number(resp.headers.get('retry-after') || 0);
+              throw error;
+            }
+            return await resp.json();
+          } finally {
+            clearTimeout(timer);
+          }
+        });
+      } catch (error: any) {
+        lastError = error;
+        const status = Number(error?.status || 0);
+        const retryable = !status || status === 403 || status === 429 || status >= 500;
+        if (!retryable || attempt === backoffs.length - 1) break;
+        if (error?.retryAfter) await delay(Math.min(error.retryAfter * 1000, 10000));
+      }
+    }
+    throw lastError;
+  };
+
+  const mapItunesSong = (r: any) => ({
+    trackName: r.trackName,
+    artistName: r.artistName,
+    collectionName: r.collectionName,
+    // upscale the 100x100 artwork to high resolution
+    artworkUrl: r.artworkUrl100 ? String(r.artworkUrl100).replace('100x100bb', '1000x1000bb') : null,
+    artworkUrlSmall: r.artworkUrl100 ? String(r.artworkUrl100).replace('100x100bb', '200x200bb') : null,
+    previewUrl: r.previewUrl || null,
+    trackTimeMillis: r.trackTimeMillis,
+  });
+
   // Search a track: /api/itunes/search?term=Seven%20Jungkook
   const itunesCache = new Map<string, any>();
   app.get('/api/itunes/search', async (req, res) => {
@@ -137,27 +204,61 @@ Respond strictly in JSON format matching the schema.`;
       if (itunesCache.has(term)) return res.json(itunesCache.get(term));
 
       const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=US&media=music&entity=song&limit=25`;
-      const resp = await fetch(url);
-      if (!resp.ok) throw new Error(`iTunes responded ${resp.status}`);
-      const data: any = await resp.json();
-
-      const results = (data.results || []).map((r: any) => ({
-        trackName: r.trackName,
-        artistName: r.artistName,
-        collectionName: r.collectionName,
-        // upscale the 100x100 artwork to high resolution
-        artworkUrl: r.artworkUrl100 ? String(r.artworkUrl100).replace('100x100bb', '1000x1000bb') : null,
-        artworkUrlSmall: r.artworkUrl100 ? String(r.artworkUrl100).replace('100x100bb', '200x200bb') : null,
-        previewUrl: r.previewUrl || null,
-        trackTimeMillis: r.trackTimeMillis,
-      }));
+      const data = await fetchItunesJson(url);
+      const results = (data.results || []).map(mapItunesSong);
 
       const payload = { results };
       itunesCache.set(term, payload);
       res.json(payload);
     } catch (err: any) {
       console.error('iTunes search error:', err.message);
-      res.status(502).json({ error: 'iTunes search failed', detail: err.message });
+      res.status(503).json({ error: 'iTunes search temporarily unavailable', retryable: true });
+    }
+  });
+
+  // One catalog request replaces twelve near-simultaneous per-song searches.
+  const itunesCatalogCache = new Map<string, any>();
+  const normalizeArtist = (value: string) =>
+    value.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9가-힣一-鿿]+/g, '');
+
+  app.get('/api/itunes/catalog', async (req, res) => {
+    try {
+      const artist = String(req.query.artist || '').trim();
+      if (!artist) return res.status(400).json({ error: 'artist is required' });
+      const key = normalizeArtist(artist);
+      if (itunesCatalogCache.has(key)) return res.json(itunesCatalogCache.get(key));
+
+      const searchUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(artist)}&country=US&media=music&entity=musicArtist&attribute=artistTerm&limit=25`;
+      const searchData = await fetchItunesJson(searchUrl);
+      const candidates: any[] = searchData.results || [];
+      const exact = candidates.filter((candidate) => normalizeArtist(String(candidate.artistName || '')) === key);
+      const artistResult = exact.find((candidate) => candidate.primaryGenreName === 'K-Pop')
+        || exact[0]
+        || candidates.find((candidate) => {
+          const got = normalizeArtist(String(candidate.artistName || ''));
+          return got && (got.includes(key) || key.includes(got));
+        });
+
+      if (!artistResult?.artistId) {
+        const payload = { artist: null, results: [] };
+        itunesCatalogCache.set(key, payload);
+        return res.json(payload);
+      }
+
+      const lookupUrl = `https://itunes.apple.com/lookup?id=${encodeURIComponent(String(artistResult.artistId))}&country=US&entity=song&limit=200`;
+      const lookupData = await fetchItunesJson(lookupUrl);
+      const results = (lookupData.results || [])
+        .filter((item: any) => item.wrapperType === 'track' && item.kind === 'song')
+        .map(mapItunesSong);
+      const payload = {
+        artist: { artistId: artistResult.artistId, artistName: artistResult.artistName },
+        results,
+      };
+      itunesCatalogCache.set(key, payload);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('iTunes catalog error:', err.message);
+      return res.status(503).json({ error: 'iTunes catalog temporarily unavailable', retryable: true });
     }
   });
 
