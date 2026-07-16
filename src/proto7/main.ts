@@ -14,6 +14,7 @@
  * 轨迹:全部飞行走 THREE.CubicBezierCurve3。
  */
 
+import '../../vendor/augmented-ui.min.css';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
