@@ -469,7 +469,18 @@ interface Vinyl {
   base: number;
   coverState: 0 | 1 | 2;
   info: TrackInfo | null;
+  labelState: {
+    x: number;
+    y: number;
+    lane: number;
+    pendingLane: number;
+    pendingSince: number;
+    active: boolean;
+  };
 }
+
+const SONG_LABEL_LANES = [0, -20, 20, -40, 40, -60, 60] as const;
+const SONG_LABEL_SWITCH_DELAY = 0.22;
 
 const glowTexShared = (() => {
   const cv = document.createElement('canvas'); cv.width = cv.height = 128;
@@ -511,7 +522,11 @@ function makeVinyl(node: MusicNode, galaxyRadius: number): Vinyl {
   document.body.appendChild(label);
   (disc as any).__vinyl = null; // 稍后回填
   (hit as any).__vinyl = null;
-  return { node, group, disc, hit, labelMat, glow: disc, label, index: 0, total: 0, base, coverState: 0, info: null };
+  return {
+    node, group, disc, hit, labelMat, glow: disc, label,
+    index: 0, total: 0, base, coverState: 0, info: null,
+    labelState: { x: 0, y: 0, lane: 0, pendingLane: 0, pendingSince: 0, active: false },
+  };
 }
 
 /* 封面/试听预取 */
@@ -2693,20 +2708,20 @@ function tick() {
   // may fade the mirror itself, but never turns the other singer nebulae off.
   updateLabelOccluderRegistry();
 
-  // ---- 歌曲亮星：在完整星云盘面稳定散布，并与星云保持同一转速 ----
+  // ---- 歌曲亮星：作为星云内的稳定导航锚点，漂浮感交给星云材质本身 ----
   if (focus?.vinylRoot) {
     const labelSlots: Array<{ x: number; y: number }> = [];
     const songLabelsActive = MODE === 'orbit' || MODE === 'landing' || MODE === 'mirror';
     for (const v of focus.vinyls) {
-      // The selected light becomes the world-space mirror anchor. Freeze only
-      // that hidden node while landing/playing; every other song keeps moving.
-      const isMirrorAnchor = v === mirrorVinyl && (MODE === 'landing' || MODE === 'mirror');
-      if (!isMirrorAnchor) focus.nebula.songPosition(v.index, v.total, v.group.position);
+      // Positions are authored once in buildVinyls(). Recomputing them from
+      // spinTime every frame made the songs orbit at ~5°/s and turned the
+      // cursor into a visual ruler for that movement. Keep the anchors fixed;
+      // particles, gas and mist continue their independent natural motion.
       const isHover = v === hoverVinyl;
-      const twinkle = 1 + Math.sin(t * 2.2 + v.index * 2.7) * 0.05;
-      const s = v.base * twinkle * (isHover ? 1.32 : 1);
+      const twinkleOpacity = 0.86 + Math.sin(t * 2.2 + v.index * 2.7) * 0.08;
+      const s = v.base * (isHover ? 1.32 : 1);
       v.disc.scale.lerp(tmpV2.setScalar(s), 1 - Math.exp(-dt * 9));
-      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 1 : 0.9;
+      (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 1 : twinkleOpacity;
 
       // The mirror and now-playing card already name the selected song. Every
       // other visible song stays labelled throughout approach and playback.
@@ -2719,30 +2734,55 @@ function tick() {
         .sub(labelCamera.position)
         .dot(labelCameraForward);
       tmpV.copy(tmpV3).project(labelCamera);
-      const screenX = (tmpV.x * 0.5 + 0.5) * innerWidth + labelX;
+      const baseScreenX = (tmpV.x * 0.5 + 0.5) * innerWidth + labelX;
       const baseScreenY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelY;
       const inFrame = tmpV.z >= -1 && tmpV.z <= 1
-        && screenX >= 62 && screenX <= innerWidth - 62
+        && baseScreenX >= 62 && baseScreenX <= innerWidth - 62
         && baseScreenY >= 8 && baseScreenY <= innerHeight - 24;
-      let screenY = THREE.MathUtils.clamp(baseScreenY, 8, innerHeight - 24);
-      if (showLabel && inFrame) {
-        // Labels remain present: collisions move to the nearest free line
-        // instead of making a song disappear from the chart.
-        for (const dy of [0, -20, 20, -40, 40, -60, 60]) {
-          const candidateY = THREE.MathUtils.clamp(baseScreenY + dy, 8, innerHeight - 24);
-          const collides = labelSlots.some(
-            (slot) => Math.abs(slot.x - screenX) < 112 && Math.abs(slot.y - candidateY) < 19,
-          );
-          if (!collides) {
-            screenY = candidateY;
-            break;
-          }
-        }
-      }
       let labelVisible = showLabel && inFrame;
-      if (
-        labelVisible
-        && labelOccludedByForeground(
+      const state = v.labelState;
+      let screenX = baseScreenX;
+      let screenY = THREE.MathUtils.clamp(baseScreenY, 8, innerHeight - 24);
+      if (labelVisible) {
+        // Keep the current lane until a new collision-free lane remains valid
+        // for a short interval. This removes the former ±20px frame-to-frame
+        // jumps when two labels briefly crossed the collision threshold.
+        const laneCollides = (lane: number) => {
+          const candidateY = THREE.MathUtils.clamp(baseScreenY + lane, 8, innerHeight - 24);
+          return labelSlots.some(
+            (slot) => Math.abs(slot.x - baseScreenX) < 112 && Math.abs(slot.y - candidateY) < 19,
+          );
+        };
+        const desiredLane = SONG_LABEL_LANES.find((lane) => !laneCollides(lane)) ?? state.lane;
+        if (!state.active) {
+          state.lane = desiredLane;
+          state.pendingLane = desiredLane;
+          state.pendingSince = t;
+        } else if (desiredLane !== state.lane) {
+          if (state.pendingLane !== desiredLane) {
+            state.pendingLane = desiredLane;
+            state.pendingSince = t;
+          } else if (t - state.pendingSince >= SONG_LABEL_SWITCH_DELAY) {
+            state.lane = desiredLane;
+          }
+        } else {
+          state.pendingLane = desiredLane;
+          state.pendingSince = t;
+        }
+
+        const targetY = THREE.MathUtils.clamp(baseScreenY + state.lane, 8, innerHeight - 24);
+        if (!state.active) {
+          state.x = baseScreenX;
+          state.y = targetY;
+        } else {
+          const follow = 1 - Math.exp(-dt * 12);
+          state.x += (baseScreenX - state.x) * follow;
+          state.y += (targetY - state.y) * follow;
+        }
+        screenX = state.x;
+        screenY = state.y;
+
+        if (labelOccludedByForeground(
           screenX,
           screenY,
           62,
@@ -2750,12 +2790,13 @@ function tick() {
           songTargetDepth,
           songTargetDistance,
           focus,
-        )
-      ) labelVisible = false;
+        )) labelVisible = false;
+      }
       if (labelVisible) {
         labelSlots.push({ x: screenX, y: screenY });
-        v.label.style.transform = `translate(${screenX.toFixed(1)}px, ${screenY.toFixed(1)}px)`;
+        v.label.style.transform = `translate3d(${screenX.toFixed(1)}px, ${screenY.toFixed(1)}px, 0)`;
       }
+      state.active = labelVisible;
       v.label.style.opacity = labelVisible ? (isHover ? '1' : '0.82') : '0';
       v.label.setAttribute('aria-hidden', String(!labelVisible));
     }
