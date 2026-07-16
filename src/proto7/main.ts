@@ -89,7 +89,10 @@ function artistGalaxySize(artist: ArtistWorld) {
 
 /* ============ 火焰方案对比模式:?compare=1 渲染三架主机(A/B/C 方案) ============ */
 const COMPARE = new URLSearchParams(location.search).has('compare');
-const BASE_PIXEL_RATIO = Math.min(window.devicePixelRatio, 1.6);
+// Bloom multiplies the framebuffer cost, so Retina's native DPR is excessive
+// for this mostly-particle scene. 1.35 stays crisp while reducing fill-rate by
+// roughly 29% versus the previous 1.6 cap.
+const BASE_PIXEL_RATIO = Math.min(window.devicePixelRatio, 1.35);
 
 /* ============ 基础三件套 ============ */
 const stage = document.getElementById('stage')!;
@@ -136,8 +139,11 @@ composer.addPass(new OutputPass());
 /* ============ 纹理 ============ */
 const texLoader = new THREE.TextureLoader();
 texLoader.setCrossOrigin('anonymous');
-const loadTex = (url: string, onOk?: (t: THREE.Texture) => void) =>
-  texLoader.load(url, (t) => onOk?.(t), undefined, () => console.warn('tex fail:', url));
+const loadTex = (url: string, onOk?: (t: THREE.Texture) => void, onError?: () => void) =>
+  texLoader.load(url, (t) => onOk?.(t), undefined, () => {
+    console.warn('tex fail:', url);
+    onError?.();
+  });
 
 /* ============ 天幕：复用 3000/proto7 的 ESO 银河全景 ============ */
 const skyMat = new THREE.MeshBasicMaterial({ color: 0x0c0f18, side: THREE.BackSide, depthWrite: false, fog: false });
@@ -145,16 +151,21 @@ const skyMesh = new THREE.Mesh(new THREE.SphereGeometry(26000, 64, 40), skyMat);
 skyMesh.rotation.set(0.34, 0, 0.3);
 scene.add(skyMesh);
 let skyLoaded = false;
-loadTex('https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/ESO_-_Milky_Way.jpg/3840px-ESO_-_Milky_Way.jpg', (t) => {
+const skyReady = new Promise<void>((resolve) => loadTex('/textures/milky-way-640.webp', (t) => {
   t.colorSpace = THREE.SRGBColorSpace;
   t.mapping = THREE.EquirectangularReflectionMapping;
+  // The panorama is always magnified on the inside of the sky sphere; mipmaps
+  // only add upload work and memory here.
+  t.generateMipmaps = false;
+  t.minFilter = THREE.LinearFilter;
   skyMat.map = t;
   // Preserve the Milky Way structure without letting its grain compete with
   // galaxies, labels, ships or the time-mirror artwork.
   skyMat.color.set(0x667086);
   skyMat.needsUpdate = true;
   skyLoaded = true;
-});
+  resolve();
+}, resolve));
 
 /* ============ 中性光照 ============ */
 scene.add(new THREE.AmbientLight(0x8b93b8, 0.5));
@@ -166,7 +177,7 @@ scene.add(keyLight.target);
 /* ============ 星野（twinkle + 高频响应） ============ */
 const starU = { uTime: { value: 0 }, uHigh: { value: 0 } };
 {
-  const N = 34000;
+  const N = 24000;
   const pos = new Float32Array(N * 3), phase = new Float32Array(N), size = new Float32Array(N);
   for (let i = 0; i < N; i++) {
     const r = 7000 + Math.random() * 16000;
@@ -215,7 +226,7 @@ const driftU = {
 {
   // This is atmosphere, not a second sky texture. A sparse 3D distribution
   // preserves readable negative space and avoids full-screen moire patterns.
-  const N = 8500;
+  const N = 6000;
   const pos = new Float32Array(N * 3);
   const color = new Float32Array(N * 3);
   const size = new Float32Array(N);
@@ -313,7 +324,7 @@ function setMirrorRenderQuality(active: boolean) {
   if (mirrorQualityActive === active) return;
   mirrorQualityActive = active;
   const pixelRatio = active
-    ? Math.min(window.devicePixelRatio, 1.24)
+    ? Math.min(window.devicePixelRatio, 1.12)
     : BASE_PIXEL_RATIO;
   renderer.setPixelRatio(pixelRatio);
   composer.setPixelRatio(pixelRatio);
@@ -680,6 +691,7 @@ function playArrivalTransition() {
   // Let WebGL paint the real cruise scene first. The overlay is visual only:
   // input stays live, and no camera / drive state is modified.
   el.arrival.classList.remove('is-active');
+  el.arrival.classList.remove('is-loading');
   requestAnimationFrame(() => {
     requestAnimationFrame(() => el.arrival.classList.add('is-active'));
   });
@@ -1165,7 +1177,7 @@ function playShipAnim(root: THREE.Object3D) {
   shipMixers.push(mx);
 }
 
-new GLTFLoader().load('/models/starfighter/scene.gltf', (g) => {
+const fighterReady = new Promise<void>((resolve) => new GLTFLoader().load('/models/starfighter/scene.gltf', (g) => {
   const ship = g.scene;
   prepFighter(ship);
   fighterClip = g.animations[0] ?? null;
@@ -1237,7 +1249,15 @@ new GLTFLoader().load('/models/starfighter/scene.gltf', (g) => {
     wingmen.forEach((wg) => (wg.holder.visible = false));
     buildCompare(pivot);
   }
-}, undefined, () => console.warn('starfighter model fail'));
+  resolve();
+}, undefined, () => {
+  console.warn('starfighter model fail');
+  resolve();
+}));
+
+// Keep the loading curtain up until the two assets that previously caused
+// visible post-refresh hitches have finished parsing and decoding.
+const startupReady = Promise.all([skyReady, fighterReady]);
 
 function applyRig(i: number) {
   rigIdx = ((i % CAM_RIGS.length) + CAM_RIGS.length) % CAM_RIGS.length;
@@ -1740,7 +1760,12 @@ addEventListener('keyup', (e) => {
 /* ============ 雷达 ============ */
 const radar = $('radar') as HTMLCanvasElement;
 const rctx = radar.getContext('2d')!;
+let lastRadarDraw = -Infinity;
 function drawRadar(t: number) {
+  // A 20 fps scanner is visually continuous and avoids uploading a new 296px
+  // canvas texture on every WebGL frame.
+  if (t - lastRadarDraw < 0.05) return;
+  lastRadarDraw = t;
   const S = 296, C = S / 2, R = C - 10;
   rctx.clearRect(0, 0, S, S);
   rctx.strokeStyle = 'rgba(236,242,250,0.22)';
@@ -1794,7 +1819,7 @@ function projectTo(elm: HTMLElement, world: THREE.Vector3, ox: number, oy: numbe
 }
 
 /* ============ 主循环 ============ */
-const clock = new THREE.Clock();
+const clock = new THREE.Timer();
 let elapsed = 0;
 
 /* rAF 看门狗:隐藏标签页(后台/自动化驱动)rAF 不派发,退回 setTimeout,
@@ -1812,6 +1837,7 @@ syncLagSmoothing();
 
 function tick() {
   scheduleTick();
+  clock.update();
   const dt = Math.min(clock.getDelta(), 0.05);
   elapsed += dt;
   const t = elapsed;
@@ -2160,9 +2186,16 @@ addEventListener('resize', () => {
   driftU.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
 });
 
-setMode('cruise');
-tick();
-playArrivalTransition();
+void startupReady.then(async () => {
+  setMode('cruise');
+  // Prime shader programs and texture uploads while the loading curtain is
+  // still opaque. The interactive loop starts after this hidden warm-up frame.
+  await renderer.compileAsync(scene, camera).catch(() => undefined);
+  composer.render();
+  clock.reset();
+  tick();
+  playArrivalTransition();
+});
 
 /* ============ 调试句柄 ============ */
 (window as any).__planetfall = {

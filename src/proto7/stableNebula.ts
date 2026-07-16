@@ -285,7 +285,10 @@ export function createStableNebulaVisual(options: {
 
   // Dense enough to read as a galaxy, but keep the nucleus from becoming an
   // additive white disk. Most of the extra mass lives in the arms and halo.
-  const count = 7000;
+  // The procedural mist already supplies the continuous body. Keeping 5.6k
+  // pinpoints preserves the silhouette while cutting refresh-time CPU work and
+  // steady-state vertex load by 20% across all 25 systems.
+  const count = 5600;
   const aRadius = new Float32Array(count);
   const aTheta = new Float32Array(count);
   const aHeight = new Float32Array(count);

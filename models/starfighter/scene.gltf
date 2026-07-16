@@ -1412,13 +1412,13 @@
   ],
   "images": [
     {
-      "uri": "textures/Star_Fighter_baseColor.jpeg"
+      "uri": "textures/Star_Fighter_baseColor.webp"
     },
     {
-      "uri": "textures/Star_Fighter_metallicRoughness.png"
+      "uri": "textures/Star_Fighter_metallicRoughness_1k.png"
     },
     {
-      "uri": "textures/Star_Fighter_normal.jpeg"
+      "uri": "textures/Star_Fighter_normal.webp"
     },
     {
       "uri": "textures/Shield_1_baseColor.png"
