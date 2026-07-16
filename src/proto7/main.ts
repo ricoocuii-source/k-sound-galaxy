@@ -688,12 +688,12 @@ function setNowPlayingVisible(visible: boolean) {
 }
 
 function playArrivalTransition() {
-  // Let WebGL paint the real cruise scene first. The overlay is visual only:
-  // input stays live, and no camera / drive state is modified.
+  // Swap loading -> fade-out in one frame so the scene never leaks through
+  // before the black curtain starts fading.
   el.arrival.classList.remove('is-active');
-  el.arrival.classList.remove('is-loading');
   requestAnimationFrame(() => {
-    requestAnimationFrame(() => el.arrival.classList.add('is-active'));
+    el.arrival.classList.add('is-active');
+    el.arrival.classList.remove('is-loading');
   });
   window.setTimeout(() => el.arrival.classList.remove('is-active'), 980);
 }
