@@ -57,7 +57,7 @@ async function searchITunes(request: Request) {
   const term = new URL(request.url).searchParams.get('term')?.trim() || '';
   if (!term) return json({ error: 'term is required' }, 400);
   try {
-    const upstream = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=25`);
+    const upstream = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=US&media=music&entity=song&limit=25`);
     if (!upstream.ok) throw new Error(`iTunes responded ${upstream.status}`);
     const data = await upstream.json() as { results?: Array<Record<string, unknown>> };
     const results = (data.results || []).map((track) => {

@@ -62,16 +62,48 @@ const LEGACY_TO_FAMILY: Record<string, keyof typeof FAMILIES> = {
   '#6D28D9': 'indigo', // Jungkook
 };
 
-/** Map a legacy data color to its refined arm color (UI theme color). */
-export function refineColor(legacyHex: string): string {
-  const fam = LEGACY_TO_FAMILY[legacyHex.toUpperCase()];
-  return fam ? FAMILIES[fam].arm : legacyHex;
+function rgbFromHex(hex: string): [number, number, number] | null {
+  const normalized = hex.trim().replace(/^#/, '');
+  if (!/^[\da-f]{6}$/i.test(normalized)) return null;
+  return [
+    Number.parseInt(normalized.slice(0, 2), 16),
+    Number.parseInt(normalized.slice(2, 4), 16),
+    Number.parseInt(normalized.slice(4, 6), 16),
+  ];
 }
 
-/** Full palette lookup from a refined arm color (falls back to indigo). */
+function nearestPalette(hex: string): NebulaPalette {
+  const source = rgbFromHex(hex);
+  if (!source) return FAMILIES.indigo;
+
+  let nearest = FAMILIES.indigo;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const palette of Object.values(FAMILIES)) {
+    const candidate = rgbFromHex(palette.arm)!;
+    const distance = source.reduce((sum, channel, index) => (
+      sum + Math.pow(channel - candidate[index], 2)
+    ), 0);
+    if (distance < nearestDistance) {
+      nearest = palette;
+      nearestDistance = distance;
+    }
+  }
+  return nearest;
+}
+
+/** Map every artist data color to the same refined family used by the nebula. */
+export function refineColor(legacyHex: string): string {
+  const fam = LEGACY_TO_FAMILY[legacyHex.toUpperCase()];
+  return (fam ? FAMILIES[fam] : nearestPalette(legacyHex)).arm;
+}
+
+/** Full palette lookup from refined, legacy, or newly added artist colors. */
 const ARM_TO_PALETTE = new Map<string, NebulaPalette>(
   Object.values(FAMILIES).map((p) => [p.arm.toLowerCase(), p])
 );
 export function paletteFor(armHex: string): NebulaPalette {
-  return ARM_TO_PALETTE.get(armHex.toLowerCase()) || FAMILIES.indigo;
+  const direct = ARM_TO_PALETTE.get(armHex.toLowerCase());
+  if (direct) return direct;
+  const legacyFamily = LEGACY_TO_FAMILY[armHex.toUpperCase()];
+  return legacyFamily ? FAMILIES[legacyFamily] : nearestPalette(armHex);
 }

@@ -733,6 +733,419 @@ const COMPACT_ARTISTS: CompactArtist[] = [
       ['Never Let Go', 'Never Let Go', 122, 'C Major', 'Cheerful'],
       ['Standing Next to You (USHER Remix)', 'Standing Next to You (USHER Remix)', 116, 'C Minor', 'Bold']
     ]
+  },
+  {
+    id: 'ateez',
+    name: 'ATEEZ',
+    chineseName: '에이티즈',
+    region: 'region_kr',
+    genre: 'genre_hiphop',
+    color: '#F97316',
+    desc: 'Performance-driven group known for cinematic concepts, explosive choreography, and anthemic sound.',
+    songs: [
+      ['BOUNCY (K-HOT CHILLI PEPPERS)'], ['WORK'], ['Crazy Form'], ['Ice On My Teeth'],
+      ['Guerrilla'], ['HALAZIA'], ['Deja Vu'], ['INCEPTION'], ['Say My Name'],
+      ['WONDERLAND'], ['Answer'], ['WAVE']
+    ]
+  },
+  {
+    id: 'enhypen',
+    name: 'ENHYPEN',
+    chineseName: '엔하이픈',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#7C3AED',
+    desc: 'Dark-pop storytellers blending polished performance, supernatural lore, and sleek contemporary production.',
+    songs: [
+      ['Bite Me'], ['Drunk-Dazed'], ['XO (Only If You Say Yes)'], ['FEVER'],
+      ['Sweet Venom'], ['Given-Taken'], ['Polaroid Love'], ['No Doubt'],
+      ['Tamed-Dashed'], ['Future Perfect (Pass the MIC)'], ['Blessed-Cursed'], ['SHOUT OUT']
+    ]
+  },
+  {
+    id: 'gidle',
+    name: '(G)I-DLE',
+    chineseName: '아이들',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#E11D48',
+    desc: 'Self-producing girl group recognized for bold concepts, sharp songwriting, and constant reinvention.',
+    searchArtist: 'i-dle',
+    itunesArtists: ['i-dle', '(G)I-DLE', 'K/DA'],
+    songs: [
+      ['Queencard'], ['Nxde'], ['TOMBOY'], ['Super Lady'], ['LATATA'], ['Oh my god'],
+      ['MY BAG'], ['HANN (Alone)'], ['Señorita'], ['HWAA'], ['LION'], ['Uh-Oh']
+    ]
+  },
+  {
+    id: 'mamamoo',
+    name: 'MAMAMOO',
+    chineseName: '마마무',
+    region: 'region_kr',
+    genre: 'genre_rnb',
+    color: '#22C55E',
+    desc: 'Vocal powerhouse quartet celebrated for commanding live stages, rich harmonies, and playful charisma.',
+    songs: [
+      ['HIP'], ['Egotistic'], ['gogobebe'], ['Starry Night'], ['Aya'], ['Dingga'],
+      ['Decalcomanie'], ['Um Oh Ah Yeh'], ['WANNA BE MYSELF'], ['Yes I Am'],
+      ['Wind flower'], ['ILLELLA']
+    ]
+  },
+  {
+    id: 'nmixx',
+    name: 'NMIXX',
+    chineseName: '엔믹스',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#38BDF8',
+    desc: 'Technically gifted group pushing mix-pop through abrupt genre turns and powerful live vocals.',
+    songs: [
+      ['DICE'], ['Love Me Like This'], ['O.O'], ['DASH'], ['Run For Roses'], ['TANK'],
+      ['See that?'], ['Roller Coaster'], ['Soñar (Breaker)'], ["Party O'Clock"],
+      ['Young, Dumb, Stupid'], ['Passionfruit']
+    ]
+  },
+  {
+    id: 'stayc',
+    name: 'STAYC',
+    chineseName: '스테이씨',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#FB7185',
+    desc: 'Bright pop specialists pairing crisp hooks and distinctive vocals with an energetic teen-fresh identity.',
+    songs: [
+      ['ASAP'], ['RUN2U'], ['STEREOTYPE'], ['SO BAD'], ['Bubble'], ['Teddy Bear'],
+      ['Poppy'], ['YOUNG LUV'], ['BEAUTIFUL MONSTER'], ['Cheeky Icy Thang'],
+      ['SLOW DOWN'], ['LOVE FOOL']
+    ]
+  },
+  {
+    id: 'illit',
+    name: 'ILLIT',
+    chineseName: '아일릿',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#A78BFA',
+    desc: 'Dreamy new-generation group combining light-footed dance pop with playful digital-age aesthetics.',
+    songs: [
+      ['Magnetic'], ['NOT CUTE ANYMORE'], ['Cherish (My Love)'], ['Tick-Tack'],
+      ['Lucky Girl Syndrome'], ['Billyeoon Goyangi (Do the Dance)'], ['IYKYK (If You Know You Know)'],
+      ['Midnight Fiction'], ['My World'], ["I'll Like You"], ['Almond Chocolate'], ['Pimple']
+    ]
+  },
+  {
+    id: 'kissoflife',
+    name: 'KISS OF LIFE',
+    chineseName: '키스 오브 라이프',
+    region: 'region_kr',
+    genre: 'genre_rnb',
+    color: '#DC2626',
+    desc: 'Confident vocal group channeling contemporary R&B, Y2K pop, and performance-led storytelling.',
+    songs: [
+      ['Sticky'], ['Midas Touch'], ['Shhh'], ['Bad News'], ['Nobody Knows'], ['Igloo'],
+      ['Get Loud'], ['Te Quiero'], ['Nothing'], ['TTG'], ['My 808'], ['Bye My Neverland']
+    ]
+  },
+  {
+    id: 'fiftyfifty',
+    name: 'FIFTY FIFTY',
+    chineseName: '피프티 피프티',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#F9A8D4',
+    desc: 'Melodic girl group known for airy vocals, easy-listening production, and globally resonant hooks.',
+    songs: [
+      ['Cupid'], ['Higher'], ["Lovin' Me"], ['Tell Me'], ['Starry Night'], ['SOS'],
+      ['Gravity'], ['Push Your Love'], ['Midnight Special'], ['Pookie'],
+      ['Naughty or Nice'], ['When You Say My Name']
+    ]
+  },
+  {
+    id: 'kep1er',
+    name: 'Kep1er',
+    chineseName: '케플러',
+    region: 'region_kr',
+    genre: 'genre_dance',
+    color: '#8B5CF6',
+    desc: 'High-energy project group combining precision choreography with colorful, futuristic dance pop.',
+    songs: [
+      ['WA DA DA'], ['Up!'], ['Giddy'], ['Galileo'], ['Shooting Star'], ['TIPI-TAP'],
+      ['MVSK'], ['Back to the City'], ['We Fresh'], ['Grand Prix'], ['Straight Line'], ['Double Up!']
+    ]
+  },
+  {
+    id: 'dreamcatcher',
+    name: 'Dreamcatcher',
+    chineseName: '드림캐쳐',
+    region: 'region_kr',
+    genre: 'genre_rock',
+    color: '#7F1D1D',
+    desc: 'Cult-favorite group fusing hard rock, electronic production, and dark fantasy into a singular sound.',
+    songs: [
+      ['BOCA'], ['Scream'], ['Deja Vu'], ['BONVOYAGE'], ['JUSTICE'], ['BEcause'],
+      ['Odd Eye'], ['Chase Me'], ['Good Night'], ['You and I'], ['PIRI'], ['MAISON']
+    ]
+  },
+  {
+    id: 'nctdream',
+    name: 'NCT DREAM',
+    chineseName: '엔시티 드림',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#84CC16',
+    desc: 'Youthful NCT unit evolving from bright teen pop into adventurous, high-impact performance music.',
+    songs: [
+      ['Hot Sauce'], ['Candy'], ['Glitch Mode'], ['Hello Future'], ['Beatbox'], ['BOOM'],
+      ['We Go Up'], ["Ridin'"], ['ISTJ'], ['Smoothie'], ['Broken Melodies'], ["When I'm With You"]
+    ]
+  },
+  {
+    id: 'theboyz',
+    name: 'THE BOYZ',
+    chineseName: '더보이즈',
+    region: 'region_kr',
+    genre: 'genre_dance',
+    color: '#2563EB',
+    desc: 'Large-scale performance group known for synchronized choreography and polished cinematic concepts.',
+    songs: [
+      ['The Stealer'], ['ROAR'], ['MAVERICK'], ['THRILL RIDE'], ['WATCH IT'], ['REVEAL'],
+      ['No Air'], ['Bloom Bloom'], ['LIP GLOSS'], ['D.D.D'], ['WHISPER'], ['Nectar']
+    ]
+  },
+  {
+    id: 'boynextdoor',
+    name: 'BOYNEXTDOOR',
+    chineseName: '보이넥스트도어',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#F59E0B',
+    desc: 'Conversational pop group turning everyday youth stories into lively, personality-rich performances.',
+    songs: [
+      ['One and Only'], ['Earth, Wind & Fire'], ['But Sometimes'], ['Nice Guy'], ['I Feel Good'],
+      ['If I Say, I Love You'], ['Serenade'], ['Dangerous'], ['But I Like You'],
+      ['Crying'], ['Life Is Cool'], ['20']
+    ]
+  },
+  {
+    id: 'riize',
+    name: 'RIIZE',
+    chineseName: '라이즈',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#F97316',
+    desc: 'Rising boy group built around emotional pop, youthful momentum, and performance-driven growth.',
+    songs: [
+      ['Get A Guitar'], ['Love 119'], ['Boom Boom Bass'], ['Talk Saxy'], ['Siren'],
+      ['Impossible'], ['Memories'], ['Lucky'], ['Combo'], ['Fly Up'], ['Bag Bad Back'], ['Odyssey']
+    ]
+  },
+  {
+    id: 'zerobaseone',
+    name: 'ZEROBASEONE',
+    chineseName: '제로베이스원',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#60A5FA',
+    desc: 'Fan-formed group balancing luminous youth pop with clean choreography and emotionally direct melodies.',
+    songs: [
+      ['In Bloom'], ['Feel the POP'], ['GOOD SO BAD'], ['CRUSH'], ['BLUE'], ['Doctor! Doctor!'],
+      ['SWEAT'], ['New Kidz on the Block'], ['YURA YURA'], ['Kill the Romeo'],
+      ['MELTING POINT'], ['Insomnia']
+    ]
+  },
+  {
+    id: 'tws',
+    name: 'TWS',
+    chineseName: '투어스',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#22D3EE',
+    desc: 'Fresh-faced group specializing in bright school-age stories and buoyant, melodic dance pop.',
+    songs: [
+      ['plot twist'], ["If I'm S, Can You Be My N?"], ['hey! hey!'], ['Last Festival'],
+      ['Countdown!'], ['BFF'], ['Double Take'], ['Oh Mymy : 7s'], ['first hooky'],
+      ['Freestyle'], ['Keep On'], ['unplugged boy']
+    ]
+  },
+  {
+    id: 'p1harmony',
+    name: 'P1Harmony',
+    chineseName: '피원하모니',
+    region: 'region_kr',
+    genre: 'genre_hiphop',
+    color: '#EF4444',
+    desc: 'Charismatic performance group mixing hip-hop attitude, strong vocals, and energetic stagecraft.',
+    songs: [
+      ["Killin' It"], ['DUH!'], ['SAD SONG'], ['Back Down'], ['JUMP'], ['Do It Like This'],
+      ['Scared'], ['SIREN'], ['Doom Du Doom'], ['Fall In Love Again'], ['EX'], ['Pretty Boy']
+    ]
+  },
+  {
+    id: 'xg',
+    name: 'XG',
+    chineseName: '엑스지',
+    region: 'region_jp',
+    genre: 'genre_hiphop',
+    color: '#C084FC',
+    desc: 'Japan-born global group operating from Seoul with sharp rap, R&B vocals, and futuristic visual direction.',
+    songs: [
+      ['WOKE UP'], ['SHOOTING STAR'], ['LEFT RIGHT'], ['TGIF'], ['GRL GVNG'], ['NEW DANCE'],
+      ['WINTER WITHOUT YOU'], ["SOMETHING AIN'T RIGHT"], ['IYKYK'], ['HOWLING'], ['GALA'], ['IS THIS LOVE']
+    ]
+  },
+  {
+    id: 'qwer',
+    name: 'QWER',
+    chineseName: '큐더블유이알',
+    region: 'region_kr',
+    genre: 'genre_rock',
+    color: '#EC4899',
+    desc: 'Idol band bringing bright pop-rock hooks, live instrumentation, and internet-era personality to K-pop.',
+    songs: [
+      ['T.B.H'], ['Discord'], ['My Name Is Malguem'], ['Harmony of Stars'], ['Make Our Highlight'],
+      ['Manito'], ['Ferris Wheel'], ['SODA'], ['Fake Idol'], ['Goodbye My Sadness'],
+      ["Let's Love"], ['Dear']
+    ]
+  },
+  {
+    id: '2ne1',
+    name: '2NE1',
+    chineseName: '투애니원',
+    region: 'region_kr',
+    genre: 'genre_hiphop',
+    color: '#D946EF',
+    desc: 'Trailblazing girl group whose fearless attitude and genre-blending hits reshaped modern K-pop performance.',
+    songs: [
+      ['I Am the Best'], ['Fire'], ["Can't Nobody"], ['Lonely'], ['Ugly'], ['Come Back Home'],
+      ['Missing You'], ["I Don't Care"], ['Go Away'], ['Falling in Love'], ['Happy'], ['Clap Your Hands']
+    ]
+  },
+  {
+    id: 'girlsgeneration',
+    name: "Girls' Generation",
+    chineseName: '少女时代',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#F472B6',
+    desc: 'Defining second-generation girl group whose songs and performances set enduring K-pop standards.',
+    searchArtist: "Girls' Generation",
+    itunesArtists: ["Girls' Generation", 'SNSD'],
+    songs: [
+      ['Gee'], ['I GOT A BOY'], ['The Boys'], ['Into the New World'], ['Genie'], ['Oh!'],
+      ['Lion Heart'], ['Mr.Mr.'], ['Run Devil Run'], ['PARTY'], ['Holiday'], ['FOREVER 1']
+    ]
+  },
+  {
+    id: 'superjunior',
+    name: 'SUPER JUNIOR',
+    chineseName: '슈퍼주니어',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#1D4ED8',
+    desc: 'Long-running Hallyu leaders known for durable teamwork, variety charisma, and era-defining dance hits.',
+    searchArtist: 'SUPER JUNIOR',
+    itunesArtists: ['SUPER JUNIOR', 'Super Junior'],
+    songs: [
+      ['Sorry, Sorry'], ['Mr. Simple'], ['BONAMANA'], ['Black Suit'], ['Devil'], ['U'],
+      ['MAMACITA'], ['Lo Siento'], ['House Party'], ['SUPER Clap'], ["It's You"], ["Don't Don"]
+    ]
+  },
+  {
+    id: 'got7',
+    name: 'GOT7',
+    chineseName: '갓세븐',
+    region: 'region_kr',
+    genre: 'genre_rnb',
+    color: '#22C55E',
+    desc: 'Globally minded group combining acrobatic performance, warm R&B, and self-directed musical growth.',
+    songs: [
+      ['Just Right'], ['Hard Carry'], ['Lullaby'], ['If You Do'], ['You Calling My Name'], ['NANANA'],
+      ['Not By the Moon'], ['Never Ever'], ['Stop Stop It'], ['A'], ['Breath'], ['Last Piece']
+    ]
+  },
+  {
+    id: 'monstax',
+    name: 'MONSTA X',
+    chineseName: '몬스타엑스',
+    region: 'region_kr',
+    genre: 'genre_hiphop',
+    color: '#DC2626',
+    desc: 'Muscular performance group blending aggressive hip-hop, sleek pop, and commanding stage presence.',
+    songs: [
+      ['HERO'], ['Shoot Out'], ['Love Killa'], ['DRAMARAMA'], ['GAMBLER'], ['Beautiful'],
+      ['Rush Hour'], ['Jealousy'], ['Alligator'], ['Follow'], ['WHO DO U LOVE?'], ["Someone's Someone"]
+    ]
+  },
+  {
+    id: 'day6',
+    name: 'DAY6',
+    chineseName: '데이식스',
+    region: 'region_kr',
+    genre: 'genre_rock',
+    color: '#0EA5E9',
+    desc: 'Singer-songwriter band renowned for emotionally direct lyrics, memorable choruses, and powerful live playing.',
+    songs: [
+      ['You Were Beautiful'], ['Time of Our Life'], ['Congratulations'], ['HAPPY'],
+      ['Welcome to the Show'], ['Shoot Me'], ['Sweet Chaos'], ['Zombie'], ['I Wait'],
+      ['days gone by'], ['Melt Down'], ['Love me or Leave me']
+    ]
+  },
+  {
+    id: 'psy',
+    name: 'PSY',
+    chineseName: '鸟叔',
+    region: 'region_kr',
+    genre: 'genre_dance',
+    color: '#FBBF24',
+    desc: 'Showman and producer whose comic energy, huge hooks, and viral spectacle brought K-pop to a global audience.',
+    songs: [
+      ['Gangnam Style'], ['Gentleman'], ['DADDY'], ['That That'], ['New Face'], ['Napal Baji'],
+      ['I LUV IT'], ['Celeb'], ['Right Now'], ['Hangover'], ['Korea'], ["It's Art"]
+    ]
+  },
+  {
+    id: 'zico',
+    name: 'ZICO',
+    chineseName: '지코',
+    region: 'region_kr',
+    genre: 'genre_hiphop',
+    color: '#F97316',
+    desc: 'Rapper-producer bridging idol pop and Korean hip-hop through precise writing and trend-setting production.',
+    songs: [
+      ['Any Song'], ['SPOT!'], ['Okey Dokey'], ['Artist'], ['BERMUDA TRIANGLE'], ['New thing'],
+      ['Boys and Girls'], ['SoulMate'], ['Freak'], ['Tough Cookie'], ['I Am You, You Are Me'], ["She's a Baby"]
+    ]
+  },
+  {
+    id: 'jimin',
+    name: 'Jimin',
+    chineseName: '朴智旻',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#F59E0B',
+    desc: 'BTS vocalist and dancer shaping intimate pop around expressive movement, airy tone, and emotional contrast.',
+    itunesArtists: ['Jimin', 'BTS'],
+    songs: [
+      ['Who'], ['Like Crazy'], ['Set Me Free Pt.2'], ['Smeraldo Garden Marching Band'],
+      ['Be Mine'], ['Slow Dance'], ['Rebirth (Intro)'], ['Closer Than This'],
+      ['Face-off'], ['Alone'], ['Christmas Love'], ['Promise']
+    ]
+  },
+  {
+    id: 'tvxq',
+    name: 'TVXQ!',
+    chineseName: '东方神起',
+    region: 'region_kr',
+    genre: 'genre_pop',
+    color: '#B91C1C',
+    desc: 'Veteran vocal duo whose precision performance and expansive catalog helped establish the Hallyu concert era.',
+    searchArtist: 'TVXQ!',
+    itunesArtists: ['TVXQ!', 'TVXQ', 'Dong Bang Shin Ki'],
+    songs: [
+      ['MIROTIC'], ['Rising Sun'], ['Hug'], ['Catch Me'], ['Keep Your Head Down'],
+      ['The Chance of Love'], ['Something'], ['Spellbound'], ['Before U Go'],
+      ['Love Line'], ['Truth'], ['Rebel']
+    ]
   }
 ];
 

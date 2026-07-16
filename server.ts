@@ -136,7 +136,7 @@ Respond strictly in JSON format matching the schema.`;
 
       if (itunesCache.has(term)) return res.json(itunesCache.get(term));
 
-      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&entity=song&limit=25`;
+      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&country=US&media=music&entity=song&limit=25`;
       const resp = await fetch(url);
       if (!resp.ok) throw new Error(`iTunes responded ${resp.status}`);
       const data: any = await resp.json();
