@@ -34,24 +34,6 @@ export const FAMILIES: Record<string, NebulaPalette> = {
   sage:   { arm: '#a3b08a', accent: '#ccd8ae', dust: '#55603f', deep: '#2a2f21' },
 };
 
-/** linear mix of two hex colors, t in 0..1 */
-export function mixHex(a: string, b: string, t: number): string {
-  const pa = parseInt(a.slice(1), 16);
-  const pb = parseInt(b.slice(1), 16);
-  const r = Math.round(((pa >> 16) & 255) * (1 - t) + ((pb >> 16) & 255) * t);
-  const g = Math.round(((pa >> 8) & 255) * (1 - t) + ((pb >> 8) & 255) * t);
-  const bl = Math.round((pa & 255) * (1 - t) + (pb & 255) * t);
-  return `#${((r << 16) | (g << 8) | bl).toString(16).padStart(6, '0')}`;
-}
-
-// Global harmony pass: pull every family a little toward one shared cosmic
-// silver, so the eight hues read as one night sky instead of eight pigments.
-const COSMIC_SILVER = '#aab2c4';
-for (const p of Object.values(FAMILIES)) {
-  p.arm = mixHex(p.arm, COSMIC_SILVER, 0.12);
-  p.accent = mixHex(p.accent, COSMIC_SILVER, 0.12);
-}
-
 /** legacy Tailwind hex (as authored in data.ts) → family key */
 const LEGACY_TO_FAMILY: Record<string, keyof typeof FAMILIES> = {
   '#A855F7': 'indigo', // BTS

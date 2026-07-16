@@ -23,10 +23,12 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RGBShiftShader } from 'three/addons/shaders/RGBShiftShader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { gsap } from 'gsap';
+import { animate as motionAnimate } from 'motion/mini';
 import { MUSIC_NODES } from '../data';
 import { MusicNode } from '../types';
 import { fetchTrackInfo, TrackInfo } from '../engine/itunes';
 import { TimeMirror } from '../engine/TimeMirror';
+import { paletteFor } from '../engine/palette';
 import {
   StableNebulaVisual,
   createStableNebulaAssets,
@@ -61,13 +63,38 @@ const ARTISTS: ArtistWorld[] = [...byArtist.entries()].map(([id, songs], idx) =>
 });
 const TOTAL_SONGS = MUSIC_NODES.length;
 
+// Size remains data-driven, but the old linear formula collapsed 20/25
+// artists into an 86–94 radius band. Rank by catalogue size, then use a stable
+// id hash to break ties into three unmistakable visual tiers.
+function hash32(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+const galaxySizeRank = new Map(
+  [...ARTISTS]
+    .sort((a, b) => b.songs.length - a.songs.length || hash32(a.id) - hash32(b.id))
+    .map((artist, rank) => [artist.id, rank]),
+);
+function artistGalaxySize(artist: ArtistWorld) {
+  const rank = galaxySizeRank.get(artist.id) ?? ARTISTS.length - 1;
+  const jitter = (hash32(`${artist.id}:radius`) / 0xffffffff * 2 - 1) * 4;
+  if (rank < 6) return { radius: THREE.MathUtils.clamp(108 + jitter, 104, 112), tier: 'large' } as const;
+  if (rank < 16) return { radius: THREE.MathUtils.clamp(84 + jitter, 80, 88), tier: 'medium' } as const;
+  return { radius: THREE.MathUtils.clamp(60 + jitter, 56, 64), tier: 'small' } as const;
+}
+
 /* ============ 火焰方案对比模式:?compare=1 渲染三架主机(A/B/C 方案) ============ */
 const COMPARE = new URLSearchParams(location.search).has('compare');
+const BASE_PIXEL_RATIO = Math.min(window.devicePixelRatio, 1.6);
 
 /* ============ 基础三件套 ============ */
 const stage = document.getElementById('stage')!;
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
+renderer.setPixelRatio(BASE_PIXEL_RATIO);
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.06;
@@ -76,8 +103,23 @@ stage.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x020308);
+const CRUISE_START_THETA = 0.2;
+const CRUISE_R = 2550;
+const CRUISE_Y = 300;
+function cruisePos(th: number, out: THREE.Vector3) {
+  return out.set(
+    Math.cos(th) * CRUISE_R,
+    CRUISE_Y + Math.sin(th * 2.3) * 90,
+    Math.sin(th) * CRUISE_R,
+  );
+}
 const camera = new THREE.PerspectiveCamera(58, innerWidth / innerHeight, 0.5, 60000);
-camera.position.set(0, 320, 2550);
+// The standby frame and the first cruise frame now share one real camera
+// position. Galaxy presentation is authored against this exact viewpoint, so
+// ignition no longer jumps to a radically different angle and exposes a row
+// of edge-on disks.
+cruisePos(CRUISE_START_THETA, camera.position);
+camera.lookAt(cruisePos(CRUISE_START_THETA + 0.55, new THREE.Vector3()).multiplyScalar(0.32));
 
 const composer = new EffectComposer(renderer);
 const renderPass = new RenderPass(scene, camera);
@@ -85,7 +127,9 @@ composer.addPass(renderPass);
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.85, 0.6, 0.58);
 composer.addPass(bloom);
 const rgbPass = new ShaderPass(RGBShiftShader);
-rgbPass.uniforms['amount'].value = 0.0009;
+// Keep the still image optically clean. Chromatic separation is reserved for
+// the actual warp transition instead of being painted across every star.
+rgbPass.uniforms['amount'].value = 0;
 composer.addPass(rgbPass);
 composer.addPass(new OutputPass());
 
@@ -95,12 +139,22 @@ texLoader.setCrossOrigin('anonymous');
 const loadTex = (url: string, onOk?: (t: THREE.Texture) => void) =>
   texLoader.load(url, (t) => onOk?.(t), undefined, () => console.warn('tex fail:', url));
 
-/* ============ 中性深空天幕：去掉低饱和度彩色银河雾光 ============ */
-const skyMat = new THREE.MeshBasicMaterial({ color: 0x03050a, side: THREE.BackSide, depthWrite: false, fog: false });
+/* ============ 天幕：复用 3000/proto7 的 ESO 银河全景 ============ */
+const skyMat = new THREE.MeshBasicMaterial({ color: 0x0c0f18, side: THREE.BackSide, depthWrite: false, fog: false });
 const skyMesh = new THREE.Mesh(new THREE.SphereGeometry(26000, 64, 40), skyMat);
 skyMesh.rotation.set(0.34, 0, 0.3);
 scene.add(skyMesh);
-const skyLoaded = true;
+let skyLoaded = false;
+loadTex('https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/ESO_-_Milky_Way.jpg/3840px-ESO_-_Milky_Way.jpg', (t) => {
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.mapping = THREE.EquirectangularReflectionMapping;
+  skyMat.map = t;
+  // Preserve the Milky Way structure without letting its grain compete with
+  // galaxies, labels, ships or the time-mirror artwork.
+  skyMat.color.set(0x667086);
+  skyMat.needsUpdate = true;
+  skyLoaded = true;
+});
 
 /* ============ 中性光照 ============ */
 scene.add(new THREE.AmbientLight(0x8b93b8, 0.5));
@@ -152,10 +206,161 @@ const starU = { uTime: { value: 0 }, uHigh: { value: 0 } };
   scene.add(new THREE.Points(g, m));
 }
 
+/* ============ 近场漂浮星尘：复用 proto6 点云语言，改为自由驾驶空间 ============ */
+const driftU = {
+  uTime: { value: 0 },
+  uHigh: { value: 0 },
+  uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
+};
+{
+  // This is atmosphere, not a second sky texture. A sparse 3D distribution
+  // preserves readable negative space and avoids full-screen moire patterns.
+  const N = 8500;
+  const pos = new Float32Array(N * 3);
+  const color = new Float32Array(N * 3);
+  const size = new Float32Array(N);
+  const seed = new Float32Array(N);
+  const speed = new Float32Array(N);
+  const flow = new Float32Array(N * 3);
+  const tints = ['#e8e0d2', '#c8ccd8', '#d8c8c0', '#9fb0dd', '#ddb9a8'].map((c) => new THREE.Color(c));
+  for (let i = 0; i < N; i++) {
+    const r = 620 + Math.pow(Math.random(), 0.62) * 5600;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    pos[i * 3 + 1] = r * Math.cos(phi) * 0.82;
+    pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
+    const c = tints[(Math.random() * tints.length) | 0];
+    const energy = 0.12 + Math.random() * 0.38;
+    color[i * 3] = c.r * energy;
+    color[i * 3 + 1] = c.g * energy;
+    color[i * 3 + 2] = c.b * energy;
+    // A few foreground grains remain tangible, while the majority stay fine
+    // enough to read as depth rather than a noisy veil.
+    size[i] = 0.8 + Math.pow(Math.random(), 1.45) * 3.8;
+    seed[i] = Math.random();
+    // Mostly calm particles with a smaller fast population. Independent axis
+    // weights prevent the point cloud from drifting as one synchronized sheet.
+    speed[i] = 0.42 + Math.pow(Math.random(), 1.65) * 2.35;
+    flow[i * 3] = (Math.random() * 2 - 1) * (0.55 + Math.random() * 0.9);
+    flow[i * 3 + 1] = (Math.random() * 2 - 1) * (0.35 + Math.random() * 0.75);
+    flow[i * 3 + 2] = (Math.random() * 2 - 1) * (0.55 + Math.random() * 0.9);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
+  geometry.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
+  geometry.setAttribute('aSeed', new THREE.BufferAttribute(seed, 1));
+  geometry.setAttribute('aSpeed', new THREE.BufferAttribute(speed, 1));
+  geometry.setAttribute('aFlow', new THREE.BufferAttribute(flow, 3));
+  geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 6200);
+  const material = new THREE.ShaderMaterial({
+    uniforms: driftU as any,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    vertexColors: true,
+    vertexShader: `
+      attribute float aSize;
+      attribute float aSeed;
+      attribute float aSpeed;
+      attribute vec3 aFlow;
+      uniform float uTime;
+      uniform float uHigh;
+      uniform float uPixelRatio;
+      varying vec3 vColor;
+      varying float vAlpha;
+      void main() {
+        vec3 p = position;
+        float phase = aSeed * 43.7;
+        float drift = 9.0 + aSeed * 28.0;
+        p += vec3(
+          sin(uTime * (0.22 + aSeed * 0.31) * aSpeed + phase),
+          cos(uTime * (0.16 + aSeed * 0.24) * aSpeed + phase * 1.7),
+          sin(uTime * (0.19 + aSeed * 0.28) * aSpeed + phase * 2.3)
+        ) * drift * aFlow;
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float att = 720.0 / max(1.0, -mv.z);
+        gl_PointSize = clamp(aSize * att * uPixelRatio, 0.65, 4.6 * uPixelRatio);
+        float twinkle = 0.76 + 0.24 * sin(uTime * (0.42 + aSpeed * 0.72) + phase);
+        vAlpha = twinkle * (0.24 + uHigh * 0.16);
+        vColor = color;
+      }`,
+    fragmentShader: `
+      varying vec3 vColor;
+      varying float vAlpha;
+      void main() {
+        float d = length(gl_PointCoord - 0.5);
+        float a = smoothstep(0.48, 0.12, d) * vAlpha;
+        if (a <= 0.002) discard;
+        gl_FragColor = vec4(vColor, a);
+      }`,
+  });
+  const driftDust = new THREE.Points(geometry, material);
+  driftDust.name = 'drifting-space-dust';
+  driftDust.frustumCulled = false;
+  driftDust.renderOrder = 1;
+  scene.add(driftDust);
+}
+
 /* ============ 歌手星系：Bezier Stable 原版螺旋粒子 + 气尘 + 连续雾盘 ============ */
 const stableNebulaAssets = createStableNebulaAssets();
 const timeMirror = new TimeMirror(stableNebulaAssets.glow);
 scene.add(timeMirror.group);
+let mirrorQualityActive = false;
+function setMirrorRenderQuality(active: boolean) {
+  if (mirrorQualityActive === active) return;
+  mirrorQualityActive = active;
+  const pixelRatio = active
+    ? Math.min(window.devicePixelRatio, 1.24)
+    : BASE_PIXEL_RATIO;
+  renderer.setPixelRatio(pixelRatio);
+  composer.setPixelRatio(pixelRatio);
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  timeMirror.setPixelRatio(pixelRatio);
+}
+
+// Automatic cruise is the curated overview. While it is active, each galaxy
+// slowly precesses with the route but keeps its own 34°–44° inclination and
+// roll. The moment the pilot takes control or a Bezier flight starts, this
+// presentation update stops and the galaxy remains a genuine fixed 3D object.
+const overviewUp = new THREE.Vector3(0, 1, 0);
+const overviewView = new THREE.Vector3();
+const overviewTangentA = new THREE.Vector3();
+const overviewTangentB = new THREE.Vector3();
+const overviewTiltDirection = new THREE.Vector3();
+const overviewNormal = new THREE.Vector3();
+const overviewTargetQ = new THREE.Quaternion();
+const overviewRollQ = new THREE.Quaternion();
+function orientNebulaForOverview(
+  group: THREE.Group,
+  rootPosition: THREE.Vector3,
+  index: number,
+  cameraPosition: THREE.Vector3,
+  blend = 1,
+) {
+  overviewView.copy(cameraPosition).sub(rootPosition).normalize();
+  overviewTangentA.copy(overviewUp)
+    .addScaledVector(overviewView, -overviewUp.dot(overviewView));
+  if (overviewTangentA.lengthSq() < 1e-5) overviewTangentA.set(1, 0, 0);
+  overviewTangentA.normalize();
+  overviewTangentB.crossVectors(overviewView, overviewTangentA).normalize();
+  const azimuth = index * 2.39996;
+  overviewTiltDirection.copy(overviewTangentA).multiplyScalar(Math.cos(azimuth))
+    .addScaledVector(overviewTangentB, Math.sin(azimuth))
+    .normalize();
+  const inclination = THREE.MathUtils.degToRad(34 + (index % 6) * 2);
+  overviewNormal.copy(overviewView).multiplyScalar(Math.cos(inclination))
+    .addScaledVector(overviewTiltDirection, Math.sin(inclination))
+    .normalize();
+  overviewTargetQ.setFromUnitVectors(overviewUp, overviewNormal);
+  overviewRollQ.setFromAxisAngle(overviewUp, (azimuth + 0.9) % (Math.PI * 2));
+  overviewTargetQ.multiply(overviewRollQ);
+  if (blend >= 1) group.quaternion.copy(overviewTargetQ);
+  else group.quaternion.slerp(overviewTargetQ, blend);
+}
 
 interface Planet {
   a: ArtistWorld;
@@ -172,19 +377,30 @@ const pickPlanets: THREE.Mesh[] = [];
 
 for (const a of ARTISTS) {
   const i = a.idx;
-  const r = Math.min(112, 42 + a.songs.length * 2.6);
+  const galaxySize = artistGalaxySize(a);
+  const r = galaxySize.radius;
   const th = i * 2.39996 + 0.7;
   const rad = 560 + 1640 * Math.sqrt(i / (ARTISTS.length - 1));
   const y = Math.sin(i * 12.9898) * 430;
   const root = new THREE.Group();
+  root.userData.sizeTier = galaxySize.tier;
+  root.userData.radius = r;
   root.position.set(Math.cos(th) * rad, y, Math.sin(th) * rad);
 
   const nebula = createStableNebulaVisual({
     id: a.id,
+    color: a.css,
     radius: r,
     assets: stableNebulaAssets,
     pixelRatio: Math.min(window.devicePixelRatio, 2),
+    morphologyIndex: i,
   });
+  orientNebulaForOverview(
+    nebula.group,
+    root.position,
+    i,
+    cruisePos(CRUISE_START_THETA, new THREE.Vector3()),
+  );
   root.add(nebula.group);
 
   // 粒子盘只负责显示；透明球仅用于鼠标命中，飞行/轨道继续沿用原 r。
@@ -224,18 +440,21 @@ const glowTexShared = (() => {
   return new THREE.CanvasTexture(cv);
 })();
 
-function makeVinyl(node: MusicNode): Vinyl {
+function makeVinyl(node: MusicNode, galaxyRadius: number): Vinyl {
   const group = new THREE.Group();
-  const starColor = new THREE.Color(0xf4f6fa);
+  // Orbit distance also scales with galaxyRadius, so this preserves a stable
+  // on-screen song-star size and singer/song ratio across all three tiers.
+  group.scale.setScalar(galaxyRadius / 94);
+  const starColor = new THREE.Color(paletteFor(node.color).accent).lerp(new THREE.Color('#ffffff'), 0.55);
   const disc = new THREE.Sprite(new THREE.SpriteMaterial({
     map: stableNebulaAssets.spike,
     color: starColor,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0.95,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   }));
-  const base = (node.radius || 4.5) >= 8 ? 34 : 26;
+  const base = (node.radius || 4.5) >= 8 ? 15 : 11;
   disc.scale.setScalar(base);
   disc.renderOrder = 10;
   group.add(disc);
@@ -248,6 +467,7 @@ function makeVinyl(node: MusicNode): Vinyl {
   const label = document.createElement('div');
   label.className = 'songStarLabel';
   label.textContent = node.name;
+  label.setAttribute('aria-hidden', 'true');
   document.body.appendChild(label);
   (disc as any).__vinyl = null; // 稍后回填
   (hit as any).__vinyl = null;
@@ -257,6 +477,7 @@ function makeVinyl(node: MusicNode): Vinyl {
 /* 封面/试听预取 */
 const trackCache = new Map<string, { info: TrackInfo | null; tex: THREE.Texture | null }>();
 const trackPromises = new Map<string, Promise<{ info: TrackInfo | null; tex: THREE.Texture | null }>>();
+const trackRetryAfter = new Map<string, number>();
 async function ensureTrack(v: Vinyl) {
   const cached = trackCache.get(v.node.id);
   if (cached) {
@@ -264,6 +485,10 @@ async function ensureTrack(v: Vinyl) {
     if (cached.tex) { v.labelMat.map = cached.tex; v.labelMat.needsUpdate = true; }
     v.coverState = 2; return;
   }
+  // A missing proxy or a transient Apple CDN failure must not permanently
+  // poison this song for the lifetime of the page. Throttle retries, but keep
+  // the cover eligible for a fresh request once the local service recovers.
+  if ((trackRetryAfter.get(v.node.id) || 0) > Date.now()) return;
   v.coverState = 1;
   let pending = trackPromises.get(v.node.id);
   if (!pending) {
@@ -277,7 +502,8 @@ async function ensureTrack(v: Vinyl) {
         );
       }
       const result = { info, tex };
-      trackCache.set(v.node.id, result);
+      if (tex) trackCache.set(v.node.id, result);
+      else trackRetryAfter.set(v.node.id, Date.now() + 8000);
       return result;
     })();
     trackPromises.set(v.node.id, pending);
@@ -286,7 +512,7 @@ async function ensureTrack(v: Vinyl) {
   trackPromises.delete(v.node.id);
   v.info = result.info;
   if (result.tex) { v.labelMat.map = result.tex; v.labelMat.needsUpdate = true; }
-  v.coverState = 2;
+  v.coverState = result.tex ? 2 : 0;
 }
 
 /* ============ Star Nest 超空间层（MIT） ============ */
@@ -404,26 +630,18 @@ const perfNow = () => performance.now();
 const $ = (id: string) => document.getElementById(id)!;
 const el = {
   mode: $('mode'), hint: $('hint'),
-  logLines: $('logLines'), logN: $('logN'), radarN: $('radarN'),
+  logN: $('logN'), radarN: $('radarN'),
   np: $('np'), npCover: $('npCover') as HTMLImageElement, npTitle: $('npTitle'), npMeta: $('npMeta'), npBar: $('npBar'),
   reticle: $('reticle'), retName: $('retName'), retSub: $('retSub'),
   vinylTag: $('vinylTag'), vtName: $('vtName'),
   pcard: $('pcard'), pcName: $('pcName'), pcCn: $('pcCn'), pcSongs: $('pcSongs'), pcLog: $('pcLog'),
-  entry: $('entry'), jumpflash: $('jumpflash'), toast: $('toast'), ignite: $('ignite'),
+  entry: $('entry'), jumpflash: $('jumpflash'), arrival: $('arrival'), toast: $('toast'),
 };
 el.radarN.textContent = String(ARTISTS.length);
 
 function setAccent(css: string) {
   document.documentElement.style.setProperty('--acc', css);
   const c = new THREE.Color(css);
-}
-
-const LOG_MAX = 3;
-function say(html: string) {
-  const i = document.createElement('i');
-  i.innerHTML = html;
-  el.logLines.appendChild(i);
-  while (el.logLines.children.length > LOG_MAX) el.logLines.removeChild(el.logLines.firstChild!);
 }
 
 /* 图鉴 */
@@ -442,11 +660,30 @@ function updateLogHud(p: Planet | null) {
 updateLogHud(null);
 
 let toastTimer = 0;
-function toast(text: string) {
+function toast(text: string, duration = 2100) {
   el.toast.textContent = text;
   el.toast.classList.add('show');
+  el.toast.setAttribute('aria-hidden', 'false');
   clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el.toast.classList.remove('show'), 2100);
+  toastTimer = window.setTimeout(() => {
+    el.toast.classList.remove('show');
+    el.toast.setAttribute('aria-hidden', 'true');
+  }, duration);
+}
+
+function setNowPlayingVisible(visible: boolean) {
+  el.np.classList.toggle('show', visible);
+  el.np.setAttribute('aria-hidden', String(!visible));
+}
+
+function playArrivalTransition() {
+  // Let WebGL paint the real cruise scene first. The overlay is visual only:
+  // input stays live, and no camera / drive state is modified.
+  el.arrival.classList.remove('is-active');
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => el.arrival.classList.add('is-active'));
+  });
+  window.setTimeout(() => el.arrival.classList.remove('is-active'), 980);
 }
 
 /* ============ 状态机 ============ */
@@ -460,29 +697,74 @@ const MODE_LABEL: Record<Mode, string> = {
   orbit: '轨道 ORBIT', landing: '镜面接近 APPROACH', mirror: '时间镜面 TIME MIRROR',
   surface: '地表 SURFACE', takeoff: '起飞 ASCENT',
 };
-const HINTS: Partial<Record<Mode, string>> = {
-  cruise: '拖拽 环视 · WASD 手动驾驶 · V 视角 · 点星系 入轨 · P 暂停 · M 静音',
-  orbit: '拖拽 环视 · 点歌曲亮星 打开粒子镜面 · 点星系 跃迁 · WASD/ESC 返航 · M 静音',
-  mirror: '移动鼠标 扰动粒子 · 点击镜面 涟漪 · ESC 返回轨道 · P 暂停 · M 静音',
-  surface: '拖拽 环视 · N 下一着陆点 · 点星系 跃迁 · WASD/ESC 起飞 · P 暂停 · M 静音',
+const HINTS: Record<Mode, string> = {
+  idle: '',
+  cruise: 'WASD 驾驶 · 拖拽环视 · 点击星系',
+  approach: '正在接近歌手',
+  orbit: '点击歌曲播放 · 点击星系切换 · ESC 返回',
+  landing: '正在接近歌曲',
+  mirror: '点击歌曲切换 · 点击歌手直航 · ESC 返回 · P 暂停 · M 静音',
+  surface: '点击歌曲播放 · ESC 返回',
+  takeoff: '正在返回巡航',
 };
 function setMode(m: Mode) {
+  const previousMode = MODE;
   MODE = m;
   el.mode.textContent = MODE_LABEL[m];
-  if (HINTS[m]) el.hint.textContent = HINTS[m]!;
-  el.pcard.classList.toggle('show', m === 'orbit' || m === 'surface');
-  const pk = el.pcard.querySelector('.k');
-  if (pk) pk.textContent = m === 'surface' ? 'SURFACE · 已着陆' : 'ORBIT · 已入轨';
-  // reticle 在 cruise/orbit/surface 三个模式都可存活(星系拾取)
-  if (m !== 'cruise' && m !== 'orbit' && m !== 'surface') { el.reticle.classList.remove('show'); hoverPlanet = null; }
-  if (m !== 'orbit') { el.vinylTag.classList.remove('show'); hoverVinyl = null; }
+  el.hint.textContent = HINTS[m];
+  el.hint.setAttribute('aria-hidden', String(m === 'idle'));
+  const cardVisible = m === 'orbit' || m === 'surface';
+  el.pcard.classList.toggle('show', cardVisible);
+  el.pcard.setAttribute('aria-hidden', String(!cardVisible));
+  // 播放态仍可直接拾取其他歌曲与歌手，不再成为交互死角。
+  if (m !== 'cruise' && m !== 'orbit' && m !== 'surface' && m !== 'mirror') {
+    el.reticle.classList.remove('show');
+    el.reticle.setAttribute('aria-hidden', 'true');
+    hoverPlanet = null;
+  }
+  if (m !== 'orbit' && m !== 'mirror') {
+    el.vinylTag.classList.remove('show');
+    el.vinylTag.setAttribute('aria-hidden', 'true');
+    hoverVinyl = null;
+  }
+  // Motion (Framer Motion's framework-agnostic package) owns only this DOM
+  // handoff. Three/WebGL keep the particle simulation and GSAP keeps camera /
+  // uniform transitions, so no two systems fight over the same property.
+  if (m === 'mirror') {
+    motionAnimate(
+      el.mode,
+      {
+        opacity: [0.18, 1],
+        transform: ['translateY(-7px) scale(.98)', 'translateY(0) scale(1)'],
+        filter: ['blur(4px)', 'blur(0px)'],
+      },
+      { duration: 0.58, ease: [0.22, 1, 0.36, 1] }
+    );
+    motionAnimate(
+      el.hint,
+      { opacity: [0, 0.82], transform: ['translateX(-50%) translateY(8px)', 'translateX(-50%) translateY(0)'] },
+      { duration: 0.72, delay: 0.08, ease: [0.22, 1, 0.36, 1] }
+    );
+  } else if (previousMode === 'mirror') {
+    motionAnimate(
+      el.hint,
+      { opacity: [0.82, 0], transform: ['translateX(-50%) translateY(0)', 'translateX(-50%) translateY(5px)'] },
+      { duration: 0.2, ease: 'easeIn' }
+    );
+  } else if (m !== 'idle') {
+    motionAnimate(
+      el.hint,
+      { opacity: 0.82, transform: 'translateX(-50%) translateY(0)' },
+      { duration: 0.26, ease: 'easeOut' }
+    );
+  }
 }
 
 /* ============ 相机运动 ============ */
 const steer = { x: 0, y: 0, tx: 0, ty: 0 };
 /* 自由环视:按住拖拽转头(全模式生效),松手保持朝向;点击与拖拽自动区分 */
 const view = { yaw: 0, pitch: 0, down: false, px: 0, py: 0, moved: false };
-let lastMirrorRippleAt = 0;
+let lastMirrorPointer = { u: 0.5, v: 0.5, at: performance.now() };
 addEventListener('pointerdown', (e) => {
   view.down = true; view.moved = false; view.px = e.clientX; view.py = e.clientY;
 });
@@ -501,15 +783,20 @@ addEventListener('pointermove', (e) => {
   }
   mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   mouseMoved = true;
-  if (MODE === 'mirror' && timeMirror.isOpen && performance.now() - lastMirrorRippleAt > 48) {
+  if (MODE === 'mirror' && timeMirror.isOpen) {
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObject(timeMirror.hitMesh, false);
     if (hits[0]?.uv) {
-      timeMirror.addRipple(hits[0].uv.x, hits[0].uv.y, elapsed, 0.72);
-      lastMirrorRippleAt = performance.now();
-    }
+      const now = performance.now();
+      const dt = Math.max(16, now - lastMirrorPointer.at);
+      const vx = (hits[0].uv.x - lastMirrorPointer.u) * 1000 / dt;
+      const vy = (hits[0].uv.y - lastMirrorPointer.v) * 1000 / dt;
+      timeMirror.setPointer(hits[0].uv.x, hits[0].uv.y, vx, vy);
+      lastMirrorPointer = { u: hits[0].uv.x, v: hits[0].uv.y, at: now };
+    } else timeMirror.clearPointer();
   }
 });
+addEventListener('pointerleave', () => timeMirror.clearPointer());
 const VIEW_UP = new THREE.Vector3(0, 1, 0);
 const lwDir = new THREE.Vector3(), lwRight = new THREE.Vector3(), lwTarget = new THREE.Vector3();
 /** 统一视线:目标方向 + 环视偏角 */
@@ -559,20 +846,15 @@ function exitManual() {
   cruiseTheta = Math.atan2(camera.position.z, camera.position.x);
   const to = cruisePos(cruiseTheta, new THREE.Vector3());
   setMode('cruise');
-  say('自动巡航接管 · 归航环线');
   flyBezier({
     to, look: cruisePos(cruiseTheta + 0.5, new THREE.Vector3()).multiplyScalar(0.35), dur: 2.2,
     onDone: () => setMode('cruise'),
   });
 }
 
-let cruiseTheta = 0.2;
-const CRUISE_R = 2550, CRUISE_Y = 300;
+let cruiseTheta = CRUISE_START_THETA;
 const camLook = new THREE.Vector3(0, 0, 0);
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3(), tmpL = new THREE.Vector3();
-function cruisePos(th: number, out: THREE.Vector3) {
-  return out.set(Math.cos(th) * CRUISE_R, CRUISE_Y + Math.sin(th * 2.3) * 90, Math.sin(th) * CRUISE_R);
-}
 
 /** 所有飞行统一走三次贝塞尔;两套镜头语言:
  *  glide  — 原有的对称软弧,适合短途转场(降落/换着陆点/归航)
@@ -651,13 +933,13 @@ function flyBezier(opts: {
   });
 }
 
-/* ============ 星云旋臂上的歌曲亮星装配 ============ */
+/* ============ 星云圆/椭圆盘面上的歌曲亮星装配 ============ */
 function buildVinyls(p: Planet) {
   if (p.vinylRoot) return;
   const root = new THREE.Group();
   const songs = p.a.songs.slice(0, 12);
   songs.forEach((node, i) => {
-    const v = makeVinyl(node);
+    const v = makeVinyl(node, p.r);
     v.index = i;
     v.total = songs.length;
     p.nebula.songPosition(i, songs.length, v.group.position);
@@ -698,7 +980,6 @@ function approachPlanet(p: Planet) {
   drive.manual = false;
   adoptPlanet(p);
   setMode('approach');
-  say(`锁定 <b>${p.a.name}</b> · 入轨序列启动`);
 
   const dir = tmpV.subVectors(camera.position, p.root.position);
   dir.y = 0; dir.normalize();
@@ -710,7 +991,7 @@ function approachPlanet(p: Planet) {
   flyBezier({
     to, look: p.root.position,
     warp: 0.55, roll: 0.34, style: 'launch',
-    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 颗歌曲亮星已显现`); },
+    onDone: () => { setMode('orbit'); initDrive(); },
   });
 }
 
@@ -721,14 +1002,13 @@ function hyperjumpTo(p: Planet) {
   if (p === focus) return;
   if (MODE === 'approach' || MODE === 'takeoff' || MODE === 'landing') return;
   // 地表起跳:先收拾停泊状态
-  if (MODE === 'surface') { audio.stop(); el.np.classList.remove('show'); undock(); }
+  if (MODE === 'surface') { audio.stop(); setNowPlayingVisible(false); undock(); }
   const oldFocus = focus;
   drive.manual = false;
   if (flight) { gsap.killTweensOf(flight); flight = null; }
   if (oldFocus) disposeVinyls(oldFocus);
   adoptPlanet(p);
   setMode('approach');
-  say(`锁定 <b>${p.a.name}</b> · 直航序列启动`);
 
   const dir = tmpV.subVectors(camera.position, p.root.position);
   dir.y = 0; dir.normalize();
@@ -739,7 +1019,7 @@ function hyperjumpTo(p: Planet) {
   flyBezier({
     to, look: p.root.position,
     warp: 0.55, roll: 0.34, style: 'launch',
-    onDone: () => { setMode('orbit'); initDrive(); say(`入轨完成 · <b>${p.vinyls.length}</b> 颗歌曲亮星已显现`); },
+    onDone: () => { setMode('orbit'); initDrive(); },
   });
 }
 
@@ -748,7 +1028,6 @@ function returnToCruise() {
   const p = focus;
   drive.manual = false;
   setMode('takeoff');
-  say(`脱离 <b>${p.a.name}</b> 轨道`);
   const to = tmpV.clone().subVectors(camera.position, p.root.position).normalize().multiplyScalar(p.r * 7.5).add(p.root.position);
   flyBezier({
     to, look: cruisePos(cruiseTheta + 0.5, tmpV2.clone()).multiplyScalar(0.4), dur: 2.2, warp: 0.4,
@@ -966,7 +1245,7 @@ function applyRig(i: number) {
   gsap.to(rigState, { x: r.x, y: r.y, duration: 1.05, ease: 'power2.inOut' });
   gsap.to(cockpit.position, { z: r.z, duration: 1.05, ease: 'power2.inOut' });
   if (fighterProto) gsap.to(fighterProto.rotation, { x: r.rotX, duration: 1.05, ease: 'power2.inOut' });
-  say(`视角 · ${r.name}`);
+  toast(`视角 · ${r.name}`);
 }
 
 /* ============ 火焰方案擂台(?compare=1):A 渐隐软化 / B 柔光羽流 / C GPU 粒子 ============ */
@@ -1119,11 +1398,11 @@ let dockVinyl: Vinyl | null = null;
 function landOnVinyl(v: Vinyl) {
   if (MODE !== 'orbit' || !focus) return;
   const p = focus;
+  mirrorTransitionEpoch++;
   drive.manual = false;
   setMode('landing');
-  say(`歌曲锁定:<b>${v.node.name}</b> · 粒子镜面正在形成`);
   audio.stop();
-  el.np.classList.remove('show');
+  setNowPlayingVisible(false);
 
   mirrorVinyl = v;
   mirrorPosition.copy(v.group.getWorldPosition(new THREE.Vector3()));
@@ -1133,10 +1412,21 @@ function landOnVinyl(v: Vinyl) {
   const to = mirrorPosition.clone().addScaledVector(approach, 62);
   to.y += 2;
 
-  planets.forEach((planet) => planet.nebula.setDimmed(true));
-  if (p.vinylRoot) p.vinylRoot.visible = false;
+  // The mirror replaces the selected song star in its existing singer galaxy.
+  // Keep the focused nebula visible as spatial context, while hiding only the
+  // unrelated galaxies and the old song-star layer.
+  planets.forEach((planet) => {
+    const isFocusedSinger = planet === p;
+    planet.root.visible = true;
+    planet.nebula.setDimmed(!isFocusedSinger);
+  });
+  // Replace only the selected song light. The remaining song lights keep
+  // orbiting inside the visible singer nebula during playback.
+  v.group.visible = false;
   timeMirror.setTexture(null);
-  timeMirror.open(mirrorPosition, '#d8dde8');
+  setMirrorRenderQuality(true);
+  timeMirror.open(mirrorPosition, p.a.css);
+  timeMirror.faceToward(to);
   void ensureTrack(v).then(() => {
     if (mirrorVinyl !== v || !timeMirror.isOpen) return;
     timeMirror.setTexture(trackCache.get(v.node.id)?.tex ?? null);
@@ -1148,36 +1438,119 @@ function landOnVinyl(v: Vinyl) {
     onDone: () => {
       if (mirrorVinyl !== v || !timeMirror.isOpen) return;
       setMode('mirror');
+      initDrive();
       void playMirrorSong(v);
     },
   });
 }
 
 let mirrorVinyl: Vinyl | null = null;
+let mirrorTransitionEpoch = 0;
 const mirrorPosition = new THREE.Vector3();
 
 async function playMirrorSong(v: Vinyl) {
   if (v.coverState !== 2) await ensureTrack(v);
   const isNew = collect(v.node.id);
   updateLogHud(focus);
-  if (isNew) toast(`图鉴 +1 · ${v.node.name}`);
+  if (isNew) toast(`已收集 · ${v.node.name}`);
   if (v.info?.previewUrl) {
     audio.play(v.info.previewUrl);
-    say(`时间镜面 · 正在播放 <b>${v.node.name}</b>`);
   } else {
-    say(`时间镜面 · <b>${v.node.name}</b> 无试听源`);
+    toast(`${v.node.name} · 暂无试听`);
   }
+}
+
+/** 播放态点击另一首歌：旧镜面退散，再按首次选歌流程飞入新镜面。 */
+function switchMirrorSong(v: Vinyl) {
+  if (MODE !== 'mirror' || !focus || v === mirrorVinyl) return;
+  const p = focus;
+  const switchEpoch = ++mirrorTransitionEpoch;
+  const previousSong = mirrorVinyl;
+  if (previousSong) previousSong.group.visible = true;
+
+  mirrorVinyl = v;
+  mirrorPosition.copy(v.group.getWorldPosition(new THREE.Vector3()));
+  v.group.visible = false;
+  drive.manual = false;
+  drive.keys.clear();
+  setMode('landing');
+  audio.stop();
+
+  // 在旧镜面退场时预取封面；镜面完全散开后才在新歌曲亮星处
+  // 重新出生，并复用首次选歌的贝塞尔飞入，而不是搬运旧对象。
+  const trackReady = ensureTrack(v);
+  timeMirror.close(() => {
+    if (switchEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v || MODE !== 'landing') return;
+
+    const approach = camera.position.clone().sub(mirrorPosition);
+    if (approach.lengthSq() < 0.001) approach.set(0, 0.15, 1);
+    approach.normalize();
+    const to = mirrorPosition.clone().addScaledVector(approach, 62);
+    to.y += 2;
+
+    timeMirror.setTexture(null);
+    timeMirror.open(mirrorPosition, p.a.css);
+    timeMirror.faceToward(to);
+    void trackReady.then(() => {
+      if (switchEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v || !timeMirror.isOpen) return;
+      timeMirror.setTexture(trackCache.get(v.node.id)?.tex ?? null);
+    });
+
+    resetView(0.8);
+    flyBezier({
+      to,
+      look: mirrorPosition,
+      dur: 2.35,
+      ease: 'power2.inOut',
+      roll: 0.18,
+      onDone: () => {
+        if (switchEpoch !== mirrorTransitionEpoch || mirrorVinyl !== v || !timeMirror.isOpen) return;
+        setMode('mirror');
+        initDrive();
+        void playMirrorSong(v);
+      },
+    });
+  });
+}
+
+/** 播放态点击另一位歌手：收起当前镜面并直接沿现有贝塞尔流程直航。 */
+function switchSingerFromMirror(p: Planet) {
+  if (MODE !== 'mirror' || !focus || p === focus) return;
+  mirrorTransitionEpoch++;
+  const selectedSong = mirrorVinyl;
+  audio.stop();
+  setNowPlayingVisible(false);
+  timeMirror.close(() => {
+    setMirrorRenderQuality(false);
+    if (selectedSong) selectedSong.group.visible = true;
+  });
+  mirrorVinyl = null;
+  planets.forEach((planet) => {
+    planet.root.visible = true;
+    planet.nebula.setDimmed(false);
+  });
+  // hyperjumpTo already owns disposal, adoption, camera flight and HUD state.
+  setMode('orbit');
+  hyperjumpTo(p);
 }
 
 function closeTimeMirror() {
   if ((MODE !== 'mirror' && MODE !== 'landing') || !focus) return;
+  mirrorTransitionEpoch++;
   const p = focus;
+  const selectedSong = mirrorVinyl;
   setMode('takeoff');
   audio.stop();
-  timeMirror.close();
+  timeMirror.close(() => {
+    setMirrorRenderQuality(false);
+    if (selectedSong) selectedSong.group.visible = true;
+  });
   mirrorVinyl = null;
   if (flight) { gsap.killTweensOf(flight); flight = null; }
-  planets.forEach((planet) => planet.nebula.setDimmed(false));
+  planets.forEach((planet) => {
+    planet.root.visible = true;
+    planet.nebula.setDimmed(false);
+  });
   if (p.vinylRoot) p.vinylRoot.visible = true;
   const dist = p.r * 3.6;
   const to = p.root.position.clone().add(new THREE.Vector3(
@@ -1187,18 +1560,17 @@ function closeTimeMirror() {
   ));
   flyBezier({
     to, look: p.root.position, dur: 1.8, ease: 'power2.inOut', roll: -0.12,
-    onDone: () => { setMode('orbit'); initDrive(); say('镜面关闭 · 已返回歌手轨道'); },
+    onDone: () => { setMode('orbit'); initDrive(); },
   });
 }
 
-const win = { shakeTo: 0 };
 let shake = 0;
 
 function dockThe(v: Vinyl) {
   // 轨道上的本体隐藏,舱内摆一张同款唱片
   v.group.visible = false;
   if (dockVinyl) { dockGroup.remove(dockVinyl.group); dockVinyl = null; }
-  const d = makeVinyl(v.node);
+  const d = makeVinyl(v.node, 94);
   d.info = v.info;
   const cached = trackCache.get(v.node.id);
   if (cached?.tex) { d.labelMat.map = cached.tex; d.labelMat.needsUpdate = true; }
@@ -1220,7 +1592,7 @@ function undock() {
 }
 
 async function playVinyl(v: Vinyl) {
-  el.np.classList.add('show');
+  setNowPlayingVisible(true);
   el.np.classList.remove('paused');
   el.npTitle.textContent = v.node.name;
   el.npMeta.textContent = `${focus?.a.name ?? ''} · ${v.node.mood} · ${v.node.bpm} BPM`;
@@ -1229,12 +1601,11 @@ async function playVinyl(v: Vinyl) {
   if (v.info?.artworkUrlSmall) el.npCover.src = v.info.artworkUrlSmall;
   const isNew = collect(v.node.id);
   updateLogHud(focus);
-  if (isNew) toast(`图鉴 +1 · ${v.node.name}`);
+  if (isNew) toast(`已收集 · ${v.node.name}`);
   if (v.info?.previewUrl) {
     audio.play(v.info.previewUrl);
-    say(`落地 · 正在播放 <b>${v.node.name}</b>`);
   } else {
-    say(`落地 · <b>${v.node.name}</b> 无试听源,静赏地貌`);
+    toast(`${v.node.name} · 暂无试听`);
   }
 }
 
@@ -1243,16 +1614,15 @@ function takeoffToOrbit() {
   const p = focus;
   drive.manual = false;
   setMode('takeoff');
-  say('起飞 · 返回轨道');
   audio.stop();
-  el.np.classList.remove('show');
+  setNowPlayingVisible(false);
   undock();
   const dist = p.r * 3.6;
   const to = tmpV.copy(p.root.position).add(tmpV2.set(Math.cos(orbitAng) * dist, p.r * 0.95, Math.sin(orbitAng) * dist));
   gsap.to(camera, { fov: 58, duration: 0.6, onUpdate: () => camera.updateProjectionMatrix() });
   flyBezier({
     to, look: p.root.position, dur: 2.4, ease: 'power2.out', warp: 0.22,
-    onDone: () => { setMode('orbit'); initDrive(); say('已回到轨道 · 挑下一张唱片'); },
+    onDone: () => { setMode('orbit'); initDrive(); },
   });
 }
 
@@ -1264,7 +1634,6 @@ function nextLanding() {
   audio.stop();
   undock();
   setMode('landing');
-  say(`转场 · 下一着陆点:<b>${nv.node.name}</b>`);
   const vWorld = nv.group.getWorldPosition(tmpV.clone());
   const n = tmpV2.subVectors(vWorld, p.root.position).normalize();
   const surf = p.root.position.clone().addScaledVector(n, p.r * 1.22);
@@ -1295,11 +1664,11 @@ function pick() {
     const hits = raycaster.intersectObjects(pickPlanets, false);
     hoverPlanet = hits.length ? planets[hits[0].object.userData.planetIdx] : null;
     document.body.style.cursor = hoverPlanet ? 'pointer' : 'default';
-  } else if ((MODE === 'orbit' || MODE === 'surface') && focus) {
-    // 唱片优先(orbit);没中再测其他星系(跃迁目标)
+  } else if ((MODE === 'orbit' || MODE === 'surface' || MODE === 'mirror') && focus) {
+    // 歌曲优先(orbit/mirror);没中再测其他星系(跃迁目标)
     hoverVinyl = null;
     hoverPlanet = null;
-    if (MODE === 'orbit') {
+    if (MODE === 'orbit' || MODE === 'mirror') {
       const songTargets = focus.vinyls.flatMap((v) => [v.disc, v.hit]);
       const hits = raycaster.intersectObjects(songTargets, false);
       hoverVinyl = hits.length ? ((hits[0].object as any).__vinyl as Vinyl) : null;
@@ -1319,11 +1688,18 @@ addEventListener('click', (e) => {
   // 拖拽环视松手不算点击
   if (view.moved) { view.moved = false; return; }
   if (MODE === 'mirror') {
+    if (hoverVinyl && hoverVinyl !== mirrorVinyl) {
+      switchMirrorSong(hoverVinyl);
+      return;
+    }
+    if (hoverPlanet && hoverPlanet !== focus) {
+      switchSingerFromMirror(hoverPlanet);
+      return;
+    }
     mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
     raycaster.setFromCamera(mouse, camera);
     const hits = raycaster.intersectObject(timeMirror.hitMesh, false);
     if (hits[0]?.uv) timeMirror.addRipple(hits[0].uv.x, hits[0].uv.y, elapsed, 1.15);
-    else closeTimeMirror();
     return;
   }
   if ((e.target as HTMLElement).closest('.np')) { audio.toggle(); el.np.classList.toggle('paused', !audio.playing); return; }
@@ -1337,7 +1713,8 @@ addEventListener('keydown', (e) => {
   drive.boost = e.shiftKey;
   if (WASD.includes(e.code)) {
     if (COMPARE) { drive.keys.add(e.code); return; }
-    if (MODE === 'mirror' || MODE === 'landing') return;
+    // 镜面播放不再锁住飞船；只在贝塞尔接近动画期间暂时接管相机。
+    if (MODE === 'landing') return;
     if (flight) return;
     drive.keys.add(e.code);
     if (MODE === 'surface' && dockVinyl) undock();
@@ -1349,7 +1726,7 @@ addEventListener('keydown', (e) => {
     else if (MODE === 'surface') takeoffToOrbit();
     else if (MODE === 'orbit') returnToCruise();
   }
-  else if (e.code === 'KeyM') { audio.setMuted(!audio.muted); say(audio.muted ? '已静音' : '声音恢复'); }
+  else if (e.code === 'KeyM') { audio.setMuted(!audio.muted); toast(audio.muted ? '已静音' : '声音已开启'); }
   else if (e.code === 'KeyP' || e.code === 'Space') { e.preventDefault(); audio.toggle(); el.np.classList.toggle('paused', !audio.playing); }
   else if (e.code === 'KeyN') nextLanding();
   else if (e.code === 'KeyV') applyRig(rigIdx + 1);
@@ -1445,6 +1822,11 @@ function tick() {
   steer.x += (steer.tx - steer.x) * (1 - Math.exp(-dt * 4.2));
   steer.y += (steer.ty - steer.y) * (1 - Math.exp(-dt * 4.2));
 
+  // 点击歌手后的 launch 贝塞尔在前 45% 先向后拉；震动只跟随这段，
+  // 到折返俯冲前自然归零。点击歌曲的降落 glide 不触发震动。
+  const pullBackT = flight?.mode === 'launch' ? Math.min(flight.t / 0.45, 1) : 0;
+  shake = flight?.mode === 'launch' ? Math.sin(pullBackT * Math.PI) * 0.8 : 0;
+
   // ---- 相机按模式 ----
   if (flight) {
     flight.curve.getPoint(flight.t, camera.position);
@@ -1487,13 +1869,6 @@ function tick() {
     if (spd > vmax) drive.vel.setLength(spd + (vmax - spd) * (1 - Math.exp(-dt * 2.2)));
     drive.vel.multiplyScalar(Math.exp(-dt * (thrusting ? 0.45 : 3.2)));
     camera.position.addScaledVector(drive.vel, dt);
-    // 星域边界:软推回
-    const distC = camera.position.length();
-    if (distC > 7200) {
-      tmpV.copy(camera.position).normalize();
-      drive.vel.addScaledVector(tmpV, -(distC - 7200) * dt * 3);
-      if (distC > 7600) say('星域边缘 · 建议调头');
-    }
     camLook.copy(camera.position).addScaledVector(drive.fwd, 200);
     camera.lookAt(camLook);
   } else if (MODE === 'cruise') {
@@ -1532,25 +1907,47 @@ function tick() {
     camera.rotateZ((Math.random() - 0.5) * shake * 0.02);
   }
 
-  // ---- Bezier Stable 星云：GPU 螺旋密度波，固定 3D 姿态且不做模型缩放/抖动 ----
+  // ---- Bezier Stable 星云：默认巡航维持丰满斜视；自由驾驶/飞行时冻结真实 3D 姿态 ----
   for (const p of planets) {
+    if (MODE === 'cruise' && !drive.manual && !flight) {
+      orientNebulaForOverview(
+        p.nebula.group,
+        p.root.position,
+        p.a.idx,
+        camera.position,
+        1 - Math.exp(-dt * 1.45),
+      );
+    }
     p.nebula.tick(
       dt,
       { intensity: (audio.bands.bass + audio.bands.mid + audio.bands.high) / 3, bass: audio.bands.bass },
       camera.position.distanceTo(p.root.position),
     );
   }
-  timeMirror.update(t, {
+  const mirrorAudioActive = audio.playing && !audio.el.paused;
+  timeMirror.update(t, mirrorAudioActive ? {
     intensity: (audio.bands.bass + audio.bands.mid + audio.bands.high) / 3,
     bass: audio.bands.bass,
     mids: audio.bands.mid,
     highs: audio.bands.high,
-  }, camera);
+  } : { intensity: 0, bass: 0, mids: 0, highs: 0 }, camera);
+  if (MODE === 'mirror' && drive.manual) {
+    // 镜面始终属于当前歌手星云；自由飞行只影响观察位置，不再把
+    // 作为空间背景的当前歌手星云压暗。
+    const dimForMirror = timeMirror.distanceFade > 0.42;
+    planets.forEach((planet) => {
+      planet.nebula.setDimmed(planet === focus ? false : dimForMirror);
+    });
+  }
 
-  // ---- 歌曲亮星：与 Bezier Stable 星云使用同一旋臂参数和密度波转速 ----
+  // ---- 歌曲亮星：在完整星云盘面稳定散布，并与星云保持同一转速 ----
   if (focus?.vinylRoot) {
+    const labelSlots: Array<{ x: number; y: number }> = [];
     for (const v of focus.vinyls) {
-      focus.nebula.songPosition(v.index, v.total, v.group.position);
+      // The selected light becomes the world-space mirror anchor. Freeze only
+      // that hidden node while landing/playing; every other song keeps moving.
+      const isMirrorAnchor = v === mirrorVinyl && (MODE === 'landing' || MODE === 'mirror');
+      if (!isMirrorAnchor) focus.nebula.songPosition(v.index, v.total, v.group.position);
       const isHover = v === hoverVinyl;
       const twinkle = 1 + Math.sin(t * 2.2 + v.index * 2.7) * 0.05;
       const s = v.base * twinkle * (isHover ? 1.32 : 1);
@@ -1558,9 +1955,24 @@ function tick() {
       (v.glow.material as THREE.SpriteMaterial).opacity = isHover ? 1 : 0.9;
 
       const showLabel = MODE === 'orbit' && focus.vinylRoot.visible;
+      // Mirror mode keeps labels visually hidden, but still projects their DOM
+      // anchors every frame so pointer hit testing and accessibility tooling
+      // stay aligned with the moving song stars during playback.
+      const shouldProjectLabel = (MODE === 'orbit' || MODE === 'mirror') && focus.vinylRoot.visible;
       const labelX = ((v.index % 3) - 1) * 18;
-      const labelVisible = showLabel && projectTo(v.label, v.group.getWorldPosition(tmpV3), labelX, v.index % 2 ? 18 : -32);
+      const labelY = v.index % 2 ? 18 : -32;
+      v.group.getWorldPosition(tmpV3);
+      tmpV.copy(tmpV3).project(camera);
+      const screenX = (tmpV.x * 0.5 + 0.5) * innerWidth + labelX;
+      const screenY = (-tmpV.y * 0.5 + 0.5) * innerHeight + labelY;
+      // Keep the orbital chart readable: retain all bright stars, but suppress
+      // labels whose screen boxes collide. Hover always reveals the exact song.
+      const collides = labelSlots.some((slot) => Math.abs(slot.x - screenX) < 108 && Math.abs(slot.y - screenY) < 19);
+      const labelProjected = shouldProjectLabel && projectTo(v.label, tmpV3, labelX, labelY);
+      const labelVisible = showLabel && (!collides || isHover) && labelProjected;
+      if (labelVisible) labelSlots.push({ x: screenX, y: screenY });
       v.label.style.opacity = labelVisible ? (isHover ? '1' : '0.82') : '0';
+      v.label.setAttribute('aria-hidden', String(!labelVisible));
     }
   }
   if (dockVinyl) {
@@ -1581,7 +1993,9 @@ function tick() {
   }
 
   // ---- 火焰三档:静止/漫游 弱 · WASD 中 · Shift/点星系飞行 全力 ----
-  const wasdActive = (COMPARE || (drive.manual && MODE === 'cruise')) &&
+  // 飞船反馈只依赖“是否正在手动驾驶”，不再被巡航/轨道/播放模式截断。
+  // 这样复用已经定稿的三档尾焰参数时，播放中继续驾驶也能保持同一套喷射反馈。
+  const wasdActive = (COMPARE || drive.manual) &&
     ['KeyW', 'KeyA', 'KeyS', 'KeyD'].some((k) => drive.keys.has(k));
   const fullBurn = !!flight || (wasdActive && drive.boost);
   let tSize: number, tSpeed: number, tOp: number;
@@ -1613,7 +2027,8 @@ function tick() {
   // 姿态由油门输入直接建模:按键=推力姿态;松 Shift 只是推力变小(角度缓落,无低头);
   // 完全松手才有阻尼减速的低头
   let aF = 0, aS = 0;
-  if (drive.manual && MODE === 'cruise') {
+  // 姿态弹簧同样跟随手动驾驶本身；模式切换不应让稳定版倾斜/加速反馈失效。
+  if (drive.manual) {
     const accIn = drive.boost ? 5600 : 2800;
     const vcap = drive.boost ? 1900 : 860;
     // 推力余量:起步满抬头;过 88% 极速余量截止归零 → 回落一步到底,无残留小角度
@@ -1674,25 +2089,33 @@ function tick() {
   skyMesh.rotation.y = t * 0.0032;
   starU.uTime.value = t;
   starU.uHigh.value += (high - starU.uHigh.value) * (1 - Math.exp(-dt * 6));
+  driftU.uTime.value = t;
+  driftU.uHigh.value += (high - driftU.uHigh.value) * (1 - Math.exp(-dt * 5));
 
   // ---- HUD ----
   pick();
-  if ((MODE === 'cruise' || MODE === 'orbit') && hoverPlanet) {
+  if ((MODE === 'cruise' || MODE === 'orbit' || MODE === 'mirror') && hoverPlanet) {
     el.retName.textContent = hoverPlanet.a.name;
-    el.retSub.textContent = `${hoverPlanet.a.songs.length} 首 · ${MODE === 'orbit' ? '点击直航' : '点击入轨'}`;
+    el.retSub.textContent = MODE === 'cruise' ? '入轨' : '切换歌手';
     const ok = projectTo(el.reticle, hoverPlanet.root.position, 26, -20);
     el.reticle.classList.toggle('show', ok);
+    el.reticle.setAttribute('aria-hidden', String(!ok));
     if (MODE === 'cruise') setAccent(hoverPlanet.a.css); // orbit 中保持焦点星应援色,不闪色
-  } else if (MODE === 'cruise' || MODE === 'orbit') {
+  } else if (MODE === 'cruise' || MODE === 'orbit' || MODE === 'mirror') {
     el.reticle.classList.remove('show');
+    el.reticle.setAttribute('aria-hidden', 'true');
     if (MODE === 'cruise' && !focus) setAccent('#ffb46b');
   }
-  if (MODE === 'orbit' && hoverVinyl) {
+  if ((MODE === 'orbit' || MODE === 'mirror') && hoverVinyl) {
     el.vtName.textContent = hoverVinyl.node.name;
+    const action = el.vinylTag.querySelector('em');
+    if (action) action.textContent = MODE === 'mirror' ? '切换歌曲' : '播放';
     const ok = projectTo(el.vinylTag, hoverVinyl.group.getWorldPosition(tmpV3), 18, -14);
     el.vinylTag.classList.toggle('show', ok);
+    el.vinylTag.setAttribute('aria-hidden', String(!ok));
   } else {
     el.vinylTag.classList.remove('show');
+    el.vinylTag.setAttribute('aria-hidden', 'true');
   }
   if (audio.el.duration > 0 && audio.el.src) {
     (el.npBar as HTMLElement).style.width = `${(audio.el.currentTime / audio.el.duration) * 100}%`;
@@ -1700,8 +2123,15 @@ function tick() {
   drawRadar(t);
 
   // ---- 后期强度 ----
-  bloom.strength = 0.7 + bass * 0.45 + warpU.uWarp.value * 0.7;
-  rgbPass.uniforms['amount'].value = 0.0009 + warpU.uWarp.value * 0.004 + bass * 0.0006;
+  // Exposure belongs to the visible mirror object, not to the UI mode. During
+  // landing/re-entry the mirror already exists, so switching on MODE made the
+  // cover use galaxy bloom (0.7+) until the final frame and then snap to 0.16.
+  // Keep its bloom fixed for the entire visible lifetime; audio still drives
+  // particle erosion and motion inside TimeMirror without pumping the image.
+  bloom.strength = timeMirror.group.visible
+    ? 0.16
+    : 0.7 + bass * 0.45 + warpU.uWarp.value * 0.7;
+  rgbPass.uniforms['amount'].value = warpU.uWarp.value * 0.0032;
   warpU.uTime.value = t;
 
   composer.render();
@@ -1713,15 +2143,12 @@ function tick() {
   }
 }
 
-/* ============ 点火 ============ */
-el.ignite.addEventListener('click', () => {
+/* 浏览器音频策略仍要求一次真实手势，但视觉体验直接从巡航开始。 */
+function unlockAudioOnce() {
   audio.unlock();
-  el.ignite.classList.add('off');
-  setMode('cruise');
-  say('引擎点火 · 舰载 AI 上线');
-  setTimeout(() => say(`长程雷达就绪 · 扫描到 <b>${ARTISTS.length}</b> 座歌手星系`), 1400);
-  setTimeout(() => say('午夜频段清澈 · 挑一颗顺眼的,点它'), 3200);
-});
+}
+addEventListener('pointerdown', unlockAudioOnce, { once: true, capture: true });
+addEventListener('keydown', unlockAudioOnce, { once: true, capture: true });
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
@@ -1729,11 +2156,12 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
   warpU.uRes.value.set(innerWidth, innerHeight);
+  driftU.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
 });
 
-setMode('idle');
+setMode('cruise');
 tick();
-if (COMPARE) setTimeout(() => el.ignite.click(), 900);
+playArrivalTransition();
 
 /* ============ 调试句柄 ============ */
 (window as any).__planetfall = {
