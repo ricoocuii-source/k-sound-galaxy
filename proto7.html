@@ -39,7 +39,10 @@
         background: radial-gradient(ellipse at center, transparent 34%, rgba(0,0,0,0.3) 66%, rgba(0,0,0,0.9) 100%);
       }
 
-      .ui { position: fixed; z-index: 40; color: var(--ink); font-family: var(--mono); }
+      /* augmented-ui is emitted after this inline stylesheet in the production
+         bundle. Keep HUD anchors fixed so its generic relative positioning can
+         never turn screen overlays into document-flow panels. */
+      .ui { position: fixed !important; z-index: 40; color: var(--ink); font-family: var(--mono); }
 
       /* ---------- 左上：舰名 + 模式 ---------- */
       .title { top: 26px; left: 30px; }
