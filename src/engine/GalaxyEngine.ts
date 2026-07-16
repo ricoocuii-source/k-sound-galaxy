@@ -96,7 +96,7 @@ interface SongStarEntry {
 // Spiral-disk galaxy particles. Per-particle color is precomputed on the CPU
 // (core→arm→accent→deep along the radius, plus dark dust); the shader only
 // handles Keplerian differential rotation, soft gaussian falloff and twinkle.
-const NEBULA_VERT = /* glsl */ `
+export const NEBULA_VERT = /* glsl */ `
   attribute float aRadius;    // disk-plane radius
   attribute float aTheta;     // initial azimuth (arm shape baked in)
   attribute float aHeight;    // disk thickness offset
@@ -117,17 +117,30 @@ const NEBULA_VERT = /* glsl */ `
     float theta = aTheta + uSpinTime * w;
     float r = aRadius * (1.0 + uFocus * 0.32);
     vec3 p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
+    vec4 probeMv = modelViewMatrix * vec4(p, 1.0);
+    float farDetail = smoothstep(420.0, 950.0, -probeMv.z);
+    // Sub-pixel spiral lanes alias into fingerprint rings. At long range only,
+    // stable per-particle offsets preserve the near view's irregular breadth.
+    theta += farDetail * (sin(aPhase * 13.71) * 0.12 + sin(aPhase * 31.13) * 0.04);
+    r *= 1.0 + farDetail * sin(aPhase * 7.37) * 0.05;
+    p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
     float att = 400.0 / max(1.0, -mv.z);
-    gl_PointSize = clamp(aSize * att * uPixelRatio * (1.0 + uFocus * 0.35), 0.5, 34.0);
+    // Preserve the same broken, star-rich body at cruise distance instead of
+    // collapsing the cloud into a few mathematically perfect spiral lines.
+    float farSize = mix(1.0, 1.08, farDetail);
+    gl_PointSize = clamp(aSize * att * farSize * uPixelRatio * (1.0 + uFocus * 0.35), 0.62, 34.0);
     vColor = aColor;
-    vBright = aBright;
+    // At long range, deterministically thin the mathematical ridge continuity
+    // while keeping individual star points crisp and stable.
+    float farScatter = smoothstep(0.16, 0.88, sin(aPhase * 17.31) * 0.5 + 0.5);
+    vBright = aBright * mix(1.0, 0.42 + 0.82 * farScatter, farDetail);
     vTwinkle = 0.8 + 0.2 * sin(uSpinTime * 2.6 + aPhase);
   }
 `;
 
-const NEBULA_FRAG = /* glsl */ `
+export const NEBULA_FRAG = /* glsl */ `
   uniform float uOpacity;
   uniform float uBrightness;
   varying vec3 vColor;
@@ -147,7 +160,7 @@ const NEBULA_FRAG = /* glsl */ `
 // Large rotating smoke billboards riding the same Keplerian spin as the disk.
 // Each puff slowly self-rotates (vRot), picks one of 4 atlas silhouettes, and
 // is pseudo-lit by the galactic core (bright toward the core, shadowed away).
-const SMOKE_VERT = /* glsl */ `
+export const SMOKE_VERT = /* glsl */ `
   attribute float aRadius;
   attribute float aTheta;
   attribute float aHeight;
@@ -171,14 +184,20 @@ const SMOKE_VERT = /* glsl */ `
     float theta = aTheta + uSpinTime * w;
     float r = aRadius * (1.0 + uFocus * 0.32);
     vec3 p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
+    vec4 probeMv = modelViewMatrix * vec4(p, 1.0);
+    float farDetail = smoothstep(420.0, 950.0, -probeMv.z);
+    theta += farDetail * (sin(aPhase * 11.83) * 0.18 + sin(aPhase * 23.17) * 0.06);
+    r *= 1.0 + farDetail * sin(aPhase * 5.91) * 0.07;
+    p = vec3(cos(theta) * r, aHeight * (1.0 + uFocus * 0.5), sin(theta) * r);
     vec4 mv = modelViewMatrix * vec4(p, 1.0);
     gl_Position = projectionMatrix * mv;
     float att = 400.0 / max(1.0, -mv.z);
-    gl_PointSize = clamp(aSize * att * uPixelRatio * (1.0 + uFocus * 0.3), 2.0, 460.0);
+    float farSize = mix(1.0, 2.15, farDetail);
+    gl_PointSize = clamp(aSize * att * farSize * uPixelRatio * (1.0 + uFocus * 0.3), 2.0, 460.0);
     vColor = aColor;
-    // mist is a close-up detail: distant galaxies read as crisp stars, so the
-    // additive haze fades with camera distance and the void stays black
-    float distFade = mix(1.0, 0.1, smoothstep(420.0, 950.0, -mv.z));
+    // Retain the irregular atmospheric body at cruise distance. The texture,
+    // color and blending stay unchanged; only distance LOD stops erasing it.
+    float distFade = mix(1.0, 0.82, farDetail);
     vAlpha = aAlpha * distFade * (0.85 + 0.15 * sin(uSpinTime * 0.7 + aPhase * 9.0));
     vRot = aPhase * 6.2831 + uSpinTime * aRotSpeed;
     vVariant = aVariant;
@@ -189,7 +208,7 @@ const SMOKE_VERT = /* glsl */ `
   }
 `;
 
-const SMOKE_FRAG = /* glsl */ `
+export const SMOKE_FRAG = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uOpacity;
   uniform float uLightGain;   // strength of the core-side illumination
@@ -224,7 +243,7 @@ const SMOKE_FRAG = /* glsl */ `
 // Continuous procedural mist disk — the seamless "gas flow" underlying the
 // discrete puffs. Arm pattern matches the particle parameterization exactly
 // and shears with the same Keplerian spin. Fades out at grazing view angles.
-const MISTDISK_VERT = /* glsl */ `
+export const MISTDISK_VERT = /* glsl */ `
   uniform float uFocus;
   varying vec2 vUv;
   varying float vFacing;
@@ -242,7 +261,7 @@ const MISTDISK_VERT = /* glsl */ `
   }
 `;
 
-const MISTDISK_FRAG = /* glsl */ `
+export const MISTDISK_FRAG = /* glsl */ `
   uniform float uSpinTime;
   uniform float uOpacity;
   uniform float uArmPhase;
@@ -356,7 +375,7 @@ const STARS_FRAG = /* glsl */ `
 // ---------------------------------------------------------------- helpers
 
 /** Exponential-falloff glow — no visible edge at any scale. */
-function makeGlowTexture(): THREE.Texture {
+export function makeGlowTexture(): THREE.Texture {
   const SIZE = 256;
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;
@@ -388,7 +407,7 @@ function makeGlowTexture(): THREE.Texture {
  * stretch). Four distinct silhouettes so clustered puffs never read as
  * repeated "cotton balls".
  */
-function makeSmokeAtlas(): THREE.Texture {
+export function makeSmokeAtlas(): THREE.Texture {
   const CELL = 256;
   const SIZE = CELL * 2;
   const c = document.createElement('canvas');
@@ -473,7 +492,7 @@ function makeSmokeAtlas(): THREE.Texture {
 }
 
 /** Astro-photography diffraction spikes — the "brightest star" look for songs. */
-function makeStarSpikeTexture(): THREE.Texture {
+export function makeStarSpikeTexture(): THREE.Texture {
   const SIZE = 256;
   const c = document.createElement('canvas');
   c.width = c.height = SIZE;

@@ -11,6 +11,14 @@ export default defineConfig(() => {
         '@': path.resolve(__dirname, '.'),
       },
     },
+    build: {
+      rollupOptions: {
+        input: {
+          main: path.resolve(__dirname, 'index.html'),
+          proto7: path.resolve(__dirname, 'proto7.html'),
+        },
+      },
+    },
     server: {
       // Toggle HMR / file-watching via the DISABLE_HMR env var.
       hmr: process.env.DISABLE_HMR !== 'true',

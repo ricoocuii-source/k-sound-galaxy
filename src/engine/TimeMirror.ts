@@ -2,33 +2,31 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  *
- * TimeMirror v3 — a complete, readable artwork whose EDGES dissolve into
- * living particles (the reference behavior: the image itself stays intact;
- * turbulence and fluidity belong to the rim).
+ * TimeMirror — image particle dispersion.
  *
- * Two co-registered layers:
- *   1. The image plane — normal blending (physically cannot blow out),
- *      zero distortion in the center, a gentle flow that only wakes up near
- *      the rim, pointer ripples, and a noise-torn alpha fade toward the edge.
- *   2. The rim particle band — pixels of the edge region reborn as grains
- *      (color continuity is what sells the fusion), curl-noise wind, radial
- *      plumes, and a pointer repulsion hole that heals itself.
+ * The cover and particles are co-registered on one cell grid. A cell's
+ * lifecycle removes that pixel from the plane while its same-colour particle
+ * leaves the surface, then restores both during its independent return.
  */
 
 import * as THREE from 'three';
 import { gsap } from 'gsap';
 
-const PLANE_W = 26;
-const PLANE_H = 36;
+const PLANE_W = 34;
+const PLANE_H = 30;
+// 36,720 samples retain a continuous image at the renderer's 1.6 DPR cap,
+// while leaving enough GPU budget for the galaxy, bloom and free-flight HUD.
+const GRID_W = 204;
+const GRID_H = 180;
 const MAX_RIPPLES = 8;
 
-// ---------- shared GLSL noise ----------
 const NOISE_GLSL = /* glsl */ `
   float hash21(vec2 p) {
     p = fract(p * vec2(234.34, 435.345));
     p += dot(p, p + 34.23);
     return fract(p.x * p.y);
   }
+
   float vnoise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
@@ -39,19 +37,173 @@ const NOISE_GLSL = /* glsl */ `
     float d = hash21(i + vec2(1.0, 1.0));
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
   }
+
   float fbm(vec2 p) {
-    float v = 0.0;
-    float amp = 0.55;
+    float value = 0.0;
+    float amplitude = 0.55;
     for (int i = 0; i < 3; i++) {
-      v += amp * vnoise(p);
-      p *= 2.13;
-      amp *= 0.5;
+      value += amplitude * vnoise(p);
+      p = p * 2.071 + vec2(1.37, -2.11);
+      amplitude *= 0.48;
     }
-    return v;
+    return value;
   }
 `;
 
-// ---------- layer 1: the image plane ----------
+// Plane and points share the same material field and independent grain clock.
+// state = (pixel transfer, active transfer, cycle id, particle seed).
+const DISPERSION_GLSL = /* glsl */ `
+  uniform float uTime;
+  uniform float uErosion;
+  uniform float uAudioEnergy;
+  uniform float uBurst;
+
+  ${NOISE_GLSL}
+
+  float materialField(vec2 home) {
+    float macro = fbm(
+      home * 2.15 + vec2(uTime * 0.0087, -uTime * 0.0063)
+    );
+    float detail = fbm(
+      home * 6.35 +
+      vec2(-uTime * 0.0061, uTime * 0.0083) +
+      macro * 1.67
+    );
+    return macro * 0.70 + detail * 0.30;
+  }
+
+  // Keep the photograph broadly readable through the middle while its
+  // perimeter dissolves unevenly. This is a warped image field—not the former
+  // ellipse, S curve, or a hard rectangular card.
+  float organicDistance(vec2 home) {
+    vec2 p = home * 2.0 - 1.0;
+    float macro = fbm(
+      p * 1.17 + vec2(uTime * 0.0071, -uTime * 0.0053) + 4.7
+    );
+    float detail = fbm(
+      p * 3.85 + vec2(-uTime * 0.0103, uTime * 0.0079) +
+      macro * 1.41
+    );
+    vec2 warp = vec2(
+      detail - 0.5,
+      fbm(p * 2.73 - 3.1 + macro * 1.23) - 0.5
+    );
+    p += warp * vec2(0.105, 0.082);
+
+    vec2 q = abs(p);
+    float imageField = max(q.x * 0.91, q.y * 1.02);
+    float roundedField = length(p / vec2(1.30, 1.22));
+    float d = mix(imageField, roundedField, 0.18);
+    d += (macro - 0.5) * 0.25 + (detail - 0.5) * 0.13;
+    return d;
+  }
+
+  float islandAlpha(vec2 home) {
+    float topErosion = smoothstep(0.44, 1.0, home.y) * 0.11;
+    return 1.0 - smoothstep(
+      0.56,
+      1.00,
+      organicDistance(home) + topErosion
+    );
+  }
+
+  float particleSeed(vec2 home) {
+    vec2 cell = floor(home * vec2(${GRID_W.toFixed(1)}, ${GRID_H.toFixed(1)}));
+    return hash21(cell + vec2(17.31, 43.79));
+  }
+
+  // A continuous soft patch: no floor(), rectangular zones or shared pulse.
+  float clusterBurst(vec2 home) {
+    float broad = fbm(
+      home * 3.65 + vec2(uTime * 0.071, -uTime * 0.053) + 12.7
+    );
+    float fine = fbm(
+      home * 8.3 + vec2(-uTime * 0.043, uTime * 0.061) - 5.2
+    );
+    return smoothstep(0.53, 0.76, broad * 0.72 + fine * 0.28);
+  }
+
+  vec4 dispersionState(vec2 home) {
+    float shape = organicDistance(home);
+    if (shape > 1.34) return vec4(0.0);
+
+    float seed = particleSeed(home);
+    float speedSeed = hash21(vec2(seed * 91.7, 12.4));
+    float period = mix(9.5, 22.8, speedSeed);
+    float phase = hash21(vec2(seed * 47.1, 5.8)) * period;
+    float clock = uTime + phase;
+    float cycleId = floor(clock / period);
+    float t = fract(clock / period);
+
+    // Every cell has a different wait, departure speed, free-drift duration
+    // and return time. Nothing here is driven by one shared sine wave.
+    float delay = mix(0.025, 0.19, hash21(vec2(seed, 2.1)));
+    float departEnd = delay + mix(0.10, 0.23, hash21(vec2(seed, 7.6)));
+    float returnStart = mix(0.50, 0.74, hash21(vec2(seed, 13.9)));
+    float returnEnd = min(
+      0.985,
+      returnStart + mix(0.13, 0.245, hash21(vec2(seed, 21.3)))
+    );
+    float lifecycle =
+      smoothstep(delay, departEnd, t) *
+      (1.0 - smoothstep(returnStart, returnEnd, t));
+
+    // The clear centre is protected. At rest only broken, broad edge patches
+    // loosen; music can reach inward through a second non-periodic field.
+    float field = materialField(home);
+    float secondary = fbm(
+      home * 5.2 + vec2(-uTime * 0.0127, uTime * 0.0091) + 21.4
+    );
+    float centre = length((home - 0.5) / vec2(0.46, 0.50));
+    float centreProtection = 1.0 - smoothstep(0.32, 0.68, centre);
+    float edgeZone =
+      smoothstep(0.43, 0.76, shape + (field - 0.5) * 0.25) *
+      (1.0 - smoothstep(1.13, 1.34, shape));
+    float brokenEdge = smoothstep(0.49, 0.72, field * 0.72 + secondary * 0.28);
+    float quietActivation = edgeZone * mix(0.34, 0.94, brokenEdge);
+
+    // The reference always keeps a dense granular border. These grains are
+    // already transferred from the image but remain close to their home;
+    // only the active population below takes a wider excursion.
+    float occupancySeed = hash21(vec2(seed * 113.7, 29.1));
+    float denseOccupancy = 1.0 - smoothstep(0.76, 0.91, occupancySeed);
+    float baseGranule =
+      edgeZone *
+      denseOccupancy *
+      mix(0.58, 0.92, brokenEdge) *
+      (1.0 - centreProtection);
+    float topErosion = smoothstep(0.48, 1.0, home.y) * 0.075;
+    float erosionFront = mix(1.06, 0.42, uErosion);
+    float inward = smoothstep(
+      erosionFront - 0.16,
+      erosionFront + 0.18,
+      shape + (field - 0.5) * 0.33
+    );
+    float audioPatch = smoothstep(
+      0.48,
+      0.73,
+      secondary * 0.63 + field * 0.37 + uBurst * 0.08
+    );
+    float audioGate = smoothstep(0.035, 0.55, uAudioEnergy + uBurst * 0.34);
+    float audioActivation = inward * audioPatch * audioGate;
+    float burstActivation =
+      clusterBurst(home) * uBurst * smoothstep(0.50, 0.88, shape);
+    float activation = max(quietActivation, audioActivation);
+    activation = clamp(
+      activation + burstActivation * 0.74,
+      0.0,
+      1.0
+    );
+    activation *= 1.0 - centreProtection;
+
+    float activeTransfer = lifecycle * activation;
+    // Only pixels that actually leave the photograph are rendered as points.
+    // The intact centre stays on the image plane and therefore remains sharp.
+    float transfer = max(baseGranule, activeTransfer);
+    return vec4(transfer, activeTransfer, cycleId, seed);
+  }
+`;
+
 const PLANE_VERT = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -63,223 +215,424 @@ const PLANE_VERT = /* glsl */ `
 const PLANE_FRAG = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uHasMap;
-  uniform float uTime;
   uniform float uAspect;
   uniform vec3 uColor;
   uniform float uBass;
   uniform float uHighs;
   uniform float uOpacity;
-  uniform float uReveal;                  // 0 hidden behind the dust -> 1 fully developed
-  uniform vec4 uRipples[${MAX_RIPPLES}];  // (u, v, startTime, strength)
+  uniform float uDistanceFade;
+  uniform float uForm;
+  uniform vec4 uRipples[8];
   varying vec2 vUv;
 
-  ${NOISE_GLSL}
+  ${DISPERSION_GLSL}
 
   void main() {
-    vec2 p = vUv * 2.0 - 1.0;
-    float e = length(p / vec2(0.66, 0.86)); // 0 center .. 1 ellipse rim
-
-    // ---- pointer ripples: a soft sheen only — NO uv displacement.
-    // Displacing the texture made the whole image judder under the cursor;
-    // the picture must stay rock-steady, light is feedback enough. ----
-    float rippleBright = 0.0;
-    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-      vec4 rip = uRipples[i];
-      if (rip.w <= 0.0) continue;
-      float age = uTime - rip.z;
-      if (age < 0.0 || age > 2.0) continue;
-      vec2 toP = vUv - rip.xy;
-      float rd = length(toP);
-      rippleBright += sin(rd * 40.0 - age * 7.0) * exp(-rd * 9.0) * exp(-age * 2.2) * rip.w;
+    // Texture sampling stays still and legible; only the material boundary
+    // and the actual transferred pixels move.
+    vec2 texUv = vUv;
+    if (uAspect < 1.0) {
+      texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
+    } else {
+      texUv.y = (texUv.y - 0.5) / uAspect + 0.5;
     }
-    rippleBright *= smoothstep(0.98, 0.55, e); // fades out toward the rim
+    vec3 tex = texture2D(uMap, clamp(texUv, 0.001, 0.999)).rgb;
+    float procedural = fbm(vUv * 3.1 + vec2(2.7, -1.4));
+    vec3 col = mix(
+      uColor * (0.28 + procedural * 0.42),
+      tex,
+      uHasMap
+    );
 
-    // ---- flow distortion ONLY at the outer rim; the image core is static ----
-    float flowZone = smoothstep(0.68, 1.02, e);
-    vec2 flow = vec2(
-      fbm(vUv * 3.0 + uTime * 0.07),
-      fbm(vUv * 3.0 - uTime * 0.055 + 7.3)
-    ) - 0.5;
+    // Pointer/click interaction is a local gravity well: a dark core with a
+    // compressed bright rim that relaxes without moving the whole surface.
+    float rippleLight = 0.0;
+    float forceDark = 0.0;
+    for (int i = 0; i < 8; i++) {
+      vec4 ripple = uRipples[i];
+      if (ripple.w <= 0.0) continue;
+      float age = uTime - ripple.z;
+      if (age < 0.0 || age > 1.45) continue;
+      float d = distance(vUv, ripple.xy);
+      float decay = exp(-age * 2.15);
+      float radius = 0.078 + smoothstep(0.0, 1.0, age) * 0.034;
+      float well = 1.0 - smoothstep(radius * 0.36, radius, d);
+      float ring = exp(-pow((d - radius) * 39.0, 2.0));
+      forceDark = max(forceDark, well * decay * ripple.w);
+      rippleLight += ring * decay * ripple.w;
+    }
 
-    // ---- develop-under-dust (opening): the lens is born as pure grain dust;
-    // when the cover is ready the veil blows away and the image fades up
-    // patchily beneath it. Pure noise threshold — no geometric wipe, no
-    // centre-out pattern. uReveal 1 -> exactly the steady-state image. ----
-    float g = fbm(vUv * 9.0 + 3.1);
-    float reveal = smoothstep(g - 0.35, g + 0.35, uReveal * 1.7 - 0.35);
+    // Calling the shared state on the continuous UV keeps the boundary soft;
+    // the grain clock still resolves to the exact point-grid cell.
+    float transfer = dispersionState(vUv).x * uHasMap;
+    float shapeAlpha = islandAlpha(vUv);
+    float edgeMicro = hash21(
+      floor(vUv * vec2(
+        ${(GRID_W * 2).toFixed(1)},
+        ${(GRID_H * 2).toFixed(1)}
+      )) + 37.2
+    );
+    float edgeDither =
+      (edgeMicro - 0.5) * 0.24 *
+      (1.0 - smoothstep(0.28, 0.82, shapeAlpha));
+    float silhouette = smoothstep(0.10, 0.48, shapeAlpha - edgeDither);
+    float formSeed = particleSeed(vUv);
+    float reveal = smoothstep(
+      formSeed * 0.58,
+      formSeed * 0.58 + 0.34,
+      uForm
+    );
 
-    vec2 texUv = vUv + flow * flowZone * (0.022 + uBass * 0.014);
-    texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
-
-    vec3 tex = texture2D(uMap, texUv).rgb;
-    float swirl = fbm(p * 2.1 + vec2(uTime * 0.1, -uTime * 0.07));
-    vec3 proc = uColor * (0.3 + 0.7 * swirl);
-    vec3 col = mix(proc, tex, uHasMap);
-
-    // ---- torn, irregular edge — NOT an ellipse. A large-amplitude angular
-    // contour noise rips the outline into lobes/spikes (matches the reference:
-    // a ragged blob, not a ring). The image and the rim particles share this
-    // SAME contour, so they read as one crumbling body. ----
-    vec2 dir = normalize(p + 1e-5);
-    // seamless angular fbm (sample on a circle so there is no atan seam)
-    float lobe = fbm(dir * 2.1 + vec2(uTime * 0.05, -uTime * 0.045)) - 0.5;  // big lobes
-    float fine = fbm(dir * 6.5 - uTime * 0.035 + 3.7) - 0.5;                 // fine tears
-    float contour = lobe * 0.34 + fine * 0.12;                              // total swing ~0.23
-    float ee = e + contour;
-    // wide fade band [0.62, 1.06]: clear core then a long ragged dissolve, the
-    // large contour swing making the actual boundary highly irregular.
-    float edgeFade = 1.0 - smoothstep(0.62, 1.06, ee);
-    // dotted erosion inside the fade band — the image breaks into grains
-    float grain = fbm(vUv * 40.0 + uTime * 0.1);
-    float band = smoothstep(0.62, 1.06, ee);
-    edgeFade = max(edgeFade, (1.0 - band) * step(band, grain) * 0.6);
-
-    float alpha = edgeFade * reveal * uOpacity;
+    float pixelPresence = 1.0 - transfer;
+    float alpha =
+      silhouette *
+      reveal *
+      pixelPresence *
+      (1.0 - clamp(forceDark * 0.92, 0.0, 0.94)) *
+      uOpacity *
+      uDistanceFade;
     if (alpha < 0.004) discard;
 
-    // dusk-dim, and hard-clamped BELOW the bloom threshold (0.82) so even a
-    // white/bright-yellow cover reads as a photo, never a light source
-    col *= 0.5 + rippleBright * 0.18 + uHighs * 0.04;
-    col = min(col, vec3(0.78));
+    col *= 0.92 + min(rippleLight, 1.0) * 0.10 + uHighs * 0.008;
+    col = min(col, vec3(0.94));
     gl_FragColor = vec4(col, alpha);
   }
 `;
 
-// ---------- layer 2: the rim particle band ----------
-const RIM_VERT = /* glsl */ `
+const PARTICLE_VERT = /* glsl */ `
   uniform sampler2D uMap;
   uniform float uHasMap;
-  uniform float uTime;
   uniform float uForm;
   uniform float uOpacity;
+  uniform float uDistanceFade;
   uniform float uBass;
   uniform float uHighs;
   uniform vec3 uColor;
-  uniform vec4 uRipples[${MAX_RIPPLES}]; // (u, v, startTime, strength) — same waves as the plane
+  uniform vec4 uRipples[8];
+  uniform vec4 uPointer;
+  uniform vec2 uPointerVelocity;
   uniform float uPixelRatio;
   uniform float uAspect;
-  uniform float uVeil;    // 1 interior dust covers the image .. 0 blown away
-  attribute vec2 aHome;   // uv-space rest position (band or interior)
-  attribute float aRand;
-  attribute float aEdge;  // 0 inner band edge .. 1 outer plume tip
-  attribute float aInner; // 1 = interior veil dust (covers the image area)
+  attribute vec2 aHome;
   varying vec3 vColor;
   varying float vAlpha;
 
-  ${NOISE_GLSL}
+  ${DISPERSION_GLSL}
 
-  vec2 curl(vec2 p) {
-    float e = 0.14;
-    float n1 = fbm(p + vec2(0.0, e));
-    float n2 = fbm(p - vec2(0.0, e));
-    float n3 = fbm(p + vec2(e, 0.0));
-    float n4 = fbm(p - vec2(e, 0.0));
-    return vec2(n1 - n2, n4 - n3) / (2.0 * e);
+  vec2 curlField(vec2 p) {
+    float epsilon = 0.075;
+    float up = fbm(p + vec2(0.0, epsilon));
+    float down = fbm(p - vec2(0.0, epsilon));
+    float right = fbm(p + vec2(epsilon, 0.0));
+    float left = fbm(p - vec2(epsilon, 0.0));
+    return vec2(up - down, left - right) / (2.0 * epsilon);
   }
 
   void main() {
-    vec2 homeW = (aHome - 0.5) * vec2(${PLANE_W.toFixed(1)}, ${PLANE_H.toFixed(1)});
-    vec2 pEll = (aHome * 2.0 - 1.0) / vec2(0.66, 0.86);
-    vec2 outDir = normalize(pEll + 1e-5);
+    vec4 state = dispersionState(aHome);
+    float transfer = state.x;
+    float activeTransfer = state.y;
+    float cycleId = state.z;
+    float seed = state.w;
 
-    // SAME irregular contour as the image plane — the particle cloud warps to
-    // the identical ragged outline, so grains + image read as one crumbling
-    // body (not a ring stuck onto an ellipse).
-    float clobe = fbm(outDir * 2.1 + vec2(uTime * 0.05, -uTime * 0.045)) - 0.5;
-    float cfine = fbm(outDir * 6.5 - uTime * 0.035 + 3.7) - 0.5;
-    float contour = clobe * 0.34 + cfine * 0.12; // matches PLANE_FRAG
-    homeW += outDir * contour * 12.0;            // push grains along the ragged edge
+    float speedSeed = hash21(vec2(seed * 91.7, 12.4));
+    float period = mix(9.5, 22.8, speedSeed);
+    float phase = hash21(vec2(seed * 47.1, 5.8)) * period;
+    float cycleT = fract((uTime + phase) / period);
 
-    // scatter origin for the opening assembly
-    float r1 = hash21(vec2(aRand, 1.7));
-    float r2 = hash21(vec2(aRand, 9.2));
-    float r3 = hash21(vec2(aRand, 4.4));
-    vec3 scatter = vec3((r1 - 0.5) * 150.0, (r2 - 0.5) * 170.0, (r3 - 0.5) * 80.0);
-    float formT = smoothstep(0.0, 1.0, clamp(uForm * 1.6 - aRand * 0.6, 0.0, 1.0));
-
-    // wind: nearly still at the inner edge (must match the plane), wild outside
-    float wildness = pow(aEdge, 1.3);
-    float amp = (0.4 + uBass * 1.4) * mix(0.12, 3.6, wildness);
-    vec2 wind = curl(aHome * 3.2 + vec2(uTime * 0.055, uTime * 0.04)) * amp;
-    // radial plumes streaming off the rim
-    float plume = (fbm(aHome * 2.2 + uTime * 0.06 + aRand) - 0.35);
-    wind += outDir * wildness * plume * (2.6 + uBass * 2.0);
-
-    vec3 pos = vec3(homeW + wind, (vnoise(aHome * 5.0 + uTime * 0.12) - 0.5) * (1.0 + wildness * 5.0));
-
-    // pointer ripples — the SAME gentle waves as the image plane. Grains bob
-    // softly on the passing wave (no repulsion, no smearing, no shaking).
-    float rippleSum = 0.0;
-    for (int i = 0; i < ${MAX_RIPPLES}; i++) {
-      vec4 rip = uRipples[i];
-      if (rip.w <= 0.0) continue;
-      float age = uTime - rip.z;
-      if (age < 0.0 || age > 2.0) continue;
-      float rd = distance(aHome, rip.xy);
-      rippleSum += sin(rd * 40.0 - age * 7.0) * exp(-rd * 9.0) * exp(-age * 2.2) * rip.w;
+    vec2 homeWorld =
+      (aHome - 0.5) * vec2(
+        ${PLANE_W.toFixed(1)},
+        ${PLANE_H.toFixed(1)}
+      );
+    vec2 radial = normalize((aHome * 2.0 - 1.0) + vec2(0.0001));
+    vec2 texUv = aHome;
+    if (uAspect < 1.0) {
+      texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
+    } else {
+      texUv.y = (texUv.y - 0.5) / uAspect + 0.5;
     }
-    pos.xy += outDir * rippleSum * 0.35; // a breath, not a shove
-    pos.z += rippleSum * 0.3;
+    vec3 sampledTex = texture2D(
+      uMap,
+      clamp(texUv, 0.001, 0.999)
+    ).rgb;
+    float sampledLuminance = dot(
+      sampledTex,
+      vec3(0.299, 0.587, 0.114)
+    );
 
-    pos = mix(scatter, pos, formT);
+    // Rebuild the independent clock so departure and return can follow
+    // different curves instead of reversing one shared translation.
+    float delay = mix(0.025, 0.19, hash21(vec2(seed, 2.1)));
+    float departEnd = delay + mix(0.10, 0.23, hash21(vec2(seed, 7.6)));
+    float returnStart = mix(0.50, 0.74, hash21(vec2(seed, 13.9)));
+    float returnEnd = min(
+      0.985,
+      returnStart + mix(0.13, 0.245, hash21(vec2(seed, 21.3)))
+    );
+    float depart = smoothstep(delay, departEnd, cycleT);
+    float returning = smoothstep(returnStart, returnEnd, cycleT);
+    float airborne = depart * (1.0 - returning);
+    float driftAge = smoothstep(departEnd, returnStart, cycleT);
 
-    // interior veil dust: while the cover has nothing to show, these grains
-    // ARE the lens body. When the cover develops (uVeil -> 0) each grain is
-    // carried off on its own gust — staggered departure, drifting out and up,
-    // like dust blown off a surface.
-    float gone = aInner * smoothstep(aRand * 0.5, aRand * 0.5 + 0.5, 1.0 - uVeil);
-    vec2 blowDir = normalize(outDir * 0.7 + vec2(hash21(vec2(aRand, 3.3)) - 0.35, hash21(vec2(aRand, 6.1)) - 0.2) + 1e-4);
-    pos.xy += blowDir * gone * (9.0 + 15.0 * r1);
-    pos.z += gone * (2.5 + 4.0 * r2);
+    // Every cycle receives two unrelated directions. Curl supplies the broad
+    // tendency; the seeded vectors prevent a layer-wide stream.
+    float angleA =
+      6.2831853 *
+      hash21(vec2(seed * 83.7, cycleId + 11.2));
+    float angleB =
+      6.2831853 *
+      hash21(vec2(seed * 37.9, cycleId + 29.6));
+    vec2 randomA = vec2(cos(angleA), sin(angleA));
+    vec2 randomB = vec2(cos(angleB), sin(angleB));
+    float speed = mix(
+      0.52,
+      1.48,
+      hash21(vec2(seed * 29.3, cycleId + 2.4))
+    );
+
+    // Two irrationally paced fields keep the grain close to its image island:
+    // a slow envelope plus fine local eddies, with no repeatable breathing.
+    vec2 broadCurl = curlField(
+      aHome * 2.15 +
+      vec2(uTime * 0.0111, -uTime * 0.0083) +
+      cycleId * vec2(0.173, -0.119)
+    );
+    vec2 detailCurl = curlField(
+      aHome * 7.25 +
+      vec2(-uTime * 0.0247, uTime * 0.0181) +
+      cycleId * vec2(-0.071, 0.097)
+    );
+    float burstHere = clusterBurst(aHome) * uBurst;
+    vec2 localDirection = normalize(
+      broadCurl * 1.34 +
+      randomA * 0.72 +
+      radial * 0.18 +
+      vec2(0.0001)
+    );
+    vec2 returnBend =
+      randomB * (1.2 + speed * 1.5) +
+      vec2(-radial.y, radial.x) *
+        (hash21(vec2(seed, cycleId + 73.2)) - 0.5) * 4.2 +
+      detailCurl * 1.8;
+    vec2 primaryOffset =
+      localDirection * (3.8 + speed * 7.6) +
+      detailCurl * (1.8 + speed * 2.4) +
+      radial * (0.7 + speed * 1.05);
+    float travelProgress = airborne * mix(0.24, 1.0, driftAge);
+    float returnArc = sin(returning * 3.14159265) * depart;
+    vec2 travel =
+      primaryOffset * travelProgress +
+      returnBend * returnArc +
+      randomB * burstHere * airborne * (2.2 + speed * 3.8);
+    float activeMotion = smoothstep(0.035, 0.52, activeTransfer);
+    float baseWeight = clamp(
+      (transfer - activeTransfer) / max(transfer, 0.001),
+      0.0,
+      1.0
+    );
+    float microPhase =
+      uTime * mix(0.11, 0.23, hash21(vec2(seed, 84.2))) +
+      seed * 6.2831853;
+    vec2 microDrift =
+      (broadCurl * 0.46 + randomA * sin(microPhase) * 0.13) *
+      baseWeight *
+      mix(0.24, 0.72, speed);
+    // A persistent, non-uniform erosion cloud removes the square-cover edge.
+    // It is still made from the cover's own samples; no separate white halo is
+    // drawn. Seeded gaps and mixed radial/curl directions create the feathered
+    // peaks visible in the reference without one global spray direction.
+    float edgeCloud = smoothstep(0.55, 1.06, organicDistance(aHome));
+    float imageCore = 1.0 - smoothstep(0.32, 0.76, organicDistance(aHome));
+    float plumeSeed = hash21(vec2(seed * 71.3, 118.9));
+    float plumeGate = smoothstep(0.28, 0.86, plumeSeed);
+    float plumeLength = edgeCloud * plumeGate * mix(
+      1.8,
+      11.8,
+      hash21(vec2(seed * 39.1, 77.4))
+    );
+    vec2 plumeDirection = normalize(
+      radial * 0.58 +
+      randomA * 0.44 +
+      broadCurl * 1.05 +
+      vec2(0.0001)
+    );
+    vec2 restingPlume = plumeDirection * plumeLength;
+    float restingPlumeDepth =
+      (hash21(vec2(seed * 17.7, 94.1)) - 0.5) *
+      plumeLength * 1.08;
+    float depthWave =
+      (fbm(
+        aHome * 3.15 +
+        vec2(uTime * 0.0187, -uTime * 0.0131) +
+        8.6
+      ) - 0.5) *
+      (2.4 + uAudioEnergy * 5.6) *
+      baseWeight;
+    // Slow spatial folding gives the point fabric a bent-film silhouette from
+    // the side. Noise drift avoids a layer-wide synchronized sine breath.
+    float macroFold = (
+      fbm(vec2(
+        aHome.y * 1.55 + uTime * 0.0067,
+        aHome.x * 0.46 - uTime * 0.0049 + 5.3
+      )) - 0.5
+    ) * (8.2 + uAudioEnergy * 2.4);
+    float imageRelief =
+      (sampledLuminance - 0.42) *
+      uHasMap *
+      3.2 *
+      baseWeight;
+    float surfaceThickness =
+      (hash21(vec2(seed * 53.7, 42.6)) - 0.5) *
+      mix(3.4, 12.6, edgeCloud) *
+      baseWeight;
+
+    vec3 assembled = vec3(
+      homeWorld + microDrift + restingPlume + travel * activeMotion,
+      (
+        (hash21(vec2(seed, cycleId + 44.1)) - 0.5) *
+        (2.4 + speed * 4.6) +
+        broadCurl.x * 2.1
+      ) * travelProgress * activeMotion +
+      (hash21(vec2(seed, cycleId + 91.4)) - 0.5) *
+        3.4 * returnArc * activeMotion +
+      broadCurl.y * baseWeight * 0.42 +
+      restingPlumeDepth +
+      macroFold * baseWeight +
+      depthWave +
+      imageRelief +
+      surfaceThickness
+    );
+
+    // Opening assembly is independent per grain. Once assembled, its image
+    // lifecycle takes over; no layer-wide scale/breath motion is introduced.
+    vec3 scatter = vec3(
+      (hash21(vec2(seed, 3.2)) - 0.5) * 72.0,
+      (hash21(vec2(seed, 8.5)) - 0.5) * 88.0,
+      (hash21(vec2(seed, 13.7)) - 0.5) * 38.0
+    );
+    float formT = smoothstep(
+      seed * 0.58,
+      seed * 0.58 + 0.34,
+      uForm
+    );
+    vec3 pos = mix(scatter, assembled, formT);
+
+    // Pointer history becomes a chain of local gravity wells. Each well
+    // compresses a rim, adds a little swirl and pushes depth inward, then the
+    // stateless spring field returns every grain to its sampled home.
+    float rippleLift = 0.0;
+    float rippleWell = 0.0;
+    vec2 rippleShift = vec2(0.0);
+    for (int i = 0; i < 8; i++) {
+      vec4 ripple = uRipples[i];
+      if (ripple.w <= 0.0) continue;
+      float age = uTime - ripple.z;
+      if (age < 0.0 || age > 1.45) continue;
+      vec2 delta = aHome - ripple.xy;
+      float d = length(delta);
+      float decay = exp(-age * 2.15);
+      float radius = 0.078 + smoothstep(0.0, 1.0, age) * 0.034;
+      float well = 1.0 - smoothstep(radius * 0.30, radius, d);
+      float ring = exp(-pow((d - radius) * 39.0, 2.0));
+      float localRipple = (well * 0.68 + ring) * decay * ripple.w;
+      vec2 localDirection = normalize(delta + vec2(0.0001));
+      vec2 localTangent = vec2(-localDirection.y, localDirection.x);
+      rippleLift += ring * decay * ripple.w;
+      rippleWell = max(rippleWell, well * decay * ripple.w);
+      rippleShift +=
+        (localDirection * 2.9 + localTangent * 0.82) * localRipple;
+    }
+    float visibleGrain = smoothstep(0.025, 0.32, transfer);
+    pos.xy += rippleShift * visibleGrain;
+    pos.z +=
+      rippleLift * visibleGrain * 0.72 -
+      rippleWell * visibleGrain * 3.2;
+
+    // The reference interaction is a continuously moving gravity well, not a
+    // trail of synchronized click pulses. A dark centre bends the fabric into
+    // depth while a compressed ring and velocity-coupled swirl preserve the
+    // tactile, springy particle texture.
+    vec2 pointerDelta = aHome - uPointer.xy;
+    float pointerDistance = length(pointerDelta);
+    vec2 pointerDirection = normalize(pointerDelta + vec2(0.0001));
+    vec2 pointerTangent = vec2(-pointerDirection.y, pointerDirection.x);
+    float pointerRadius = 0.18;
+    float pointerEnvelope =
+      1.0 - smoothstep(pointerRadius * 0.25, pointerRadius * 1.42, pointerDistance);
+    float pointerCore =
+      1.0 - smoothstep(pointerRadius * 0.08, pointerRadius * 0.68, pointerDistance);
+    float pointerRing = exp(
+      -pow((pointerDistance - pointerRadius * 0.74) * 43.0, 2.0)
+    );
+    float pointerSpeed = min(length(uPointerVelocity) * 2.4, 1.0);
+    float pointerForce = uPointer.z * visibleGrain;
+    float ringDelta = pointerRadius * 0.72 - pointerDistance;
+    pos.xy +=
+      pointerDirection * ringDelta * ${PLANE_W.toFixed(1)} *
+        pointerEnvelope * pointerForce * 0.23 +
+      pointerTangent * pointerRing * pointerSpeed * pointerForce * 0.92;
+    pos.z +=
+      pointerRing * pointerForce * 1.1 -
+      pointerCore * pointerForce * 6.6;
 
     vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mv;
 
-    // grain color: born from the edge pixel but reborn as COOL FAINT DUST.
-    // Additive stacking is unbounded, so bright covers must NOT make bright
-    // grains — the reference rim is silvery sand regardless of the artwork.
-    vec2 texUv = aHome;
-    texUv.x = (texUv.x - 0.5) * uAspect + 0.5;
-    vec3 tex = texture2D(uMap, clamp(texUv, 0.02, 0.98)).rgb;
-    vec3 proc = uColor * (0.35 + 0.7 * fbm(aHome * 3.0 + aRand * 7.0));
-    vec3 src = mix(proc, tex, uHasMap);
-    float lum = dot(src, vec3(0.299, 0.587, 0.114));
-    // 85% desaturate → then pull hard toward the dust tone: the HOST NEBULA's
-    // arm color. One artist region = one hue family, from overview all the way
-    // into the lens — covers contribute content, never tinting.
-    // (additive stacking bleaches hue, so the lean must be strong to survive)
-    vec3 col = mix(vec3(lum), src, 0.3);
-    vec3 dustTone = mix(vec3(0.80, 0.83, 0.92), uColor, 0.6);
-    col = mix(col, dustTone, 0.6);
-    col = min(col * (0.42 + uHighs * 0.15 + max(rippleSum, 0.0) * 0.2), vec3(0.7)); // faint, capped low
+    float procedural = fbm(aHome * 3.1 + vec2(2.7, -1.4));
+    vColor = mix(
+      uColor * (0.28 + procedural * 0.42),
+      sampledTex,
+      uHasMap
+    );
+    // Keep the sampled hue; only a restrained gamma lift separates dark cover
+    // pixels from the star field.
+    vColor = min(
+      pow(clamp(vColor, 0.0, 1.0), vec3(0.90)) * 0.88,
+      vec3(0.86)
+    );
+    vColor *= 1.0 + pointerRing * pointerForce * 1.18;
 
-    float att = 300.0 / max(1.0, -mv.z);
-    float size = mix(0.5, 1.9, wildness * 0.6 + 0.4 * lum);
-    gl_PointSize = clamp(size * att * uPixelRatio * (0.6 + 0.4 * formT), 0.5, 7.0);
+    float luminance = dot(vColor, vec3(0.299, 0.587, 0.114));
+    float perspective = 102.0 / max(1.0, -mv.z);
+    float size = mix(
+      0.82,
+      1.58,
+      hash21(vec2(seed, cycleId + 61.3))
+    );
+    size *= mix(0.85, 1.18, luminance);
+    size *= mix(1.15, 0.98, imageCore);
+    size *= 1.0 + pointerRing * pointerForce * 0.72;
+    gl_PointSize = clamp(
+      size * perspective * uPixelRatio,
+      0.85,
+      4.2
+    );
 
-    vColor = col;
-    // bell-shaped density across the widened band [e 0.6..1.35]: sparse where
-    // the image is still solid, densest through the dissolve zone, feathering
-    // out to the plume tips. Contour makes spikes denser, hollows sparser — so
-    // the cloud's own outline is ragged too.
-    float profile = smoothstep(0.0, 0.25, aEdge) * (1.0 - 0.9 * smoothstep(0.45, 1.0, aEdge));
-    profile *= clamp(1.0 + contour * 1.3, 0.55, 1.5);
-    // interior dust keeps its own steady density while veiled, fades as it departs
-    float innerProfile = 0.5 + 0.35 * hash21(vec2(aRand, 2.2));
-    profile = mix(profile, innerProfile, aInner);
-    vAlpha = uOpacity * profile * (0.3 + 0.7 * formT) * 0.5 * (1.0 - gone);
+    // No cover means no particles. With a cover, point opacity is the same
+    // transfer that removed the corresponding image cell.
+    vAlpha =
+      mix(0.34, 1.0, uHasMap) *
+      uOpacity *
+      uDistanceFade *
+      formT *
+      min(1.0, clamp(transfer, 0.0, 1.0) * 1.08) *
+      (mix(0.44, 0.88, imageCore) + rippleLift * 0.10) *
+      (1.0 + pointerRing * pointerForce * 0.55) *
+      (1.0 - pointerCore * pointerForce * 0.94);
   }
 `;
 
-const RIM_FRAG = /* glsl */ `
+const PARTICLE_FRAG = /* glsl */ `
   varying vec3 vColor;
   varying float vAlpha;
+
   void main() {
-    vec2 c = gl_PointCoord - 0.5;
-    float d2 = dot(c, c);
-    float a = exp(-d2 * 11.0) - 0.012;
-    if (a <= 0.0) discard;
-    gl_FragColor = vec4(vColor, a * vAlpha);
+    vec2 p = gl_PointCoord - 0.5;
+    float d2 = dot(p, p);
+    float alpha = (exp(-d2 * 16.0) - 0.018) * vAlpha;
+    if (alpha <= 0.003) discard;
+    gl_FragColor = vec4(vColor, alpha);
   }
 `;
 
@@ -292,7 +645,7 @@ export interface AudioLevels {
 
 export class TimeMirror {
   public group: THREE.Group;
-  public mirrorMat: THREE.ShaderMaterial; // the plane material (uHasMap read by dev/QA)
+  public mirrorMat: THREE.ShaderMaterial;
   private plane: THREE.Mesh;
   private rim: THREE.Points;
   private rimMat: THREE.ShaderMaterial;
@@ -301,120 +654,106 @@ export class TimeMirror {
   private ripples: Float32Array;
   private rippleIndex = 0;
   private fallbackTex: THREE.Texture;
-  private texEpoch = 0; // bumped on every setTexture; guards close()'s deferred wipe
+  private textureEpoch = 0;
+  private transitionEpoch = 0;
   private lastTime = 0;
-  private openAt = 0;
-  private unveilStarted = false;
-  private hasTexture = false;
+  private erosion = 0;
+  private burst = 0;
+  private previousBass = 0;
+  private previousHighs = 0;
+  private pointerTarget = 0;
+  private pointerStrength = 0;
   public isOpen = false;
+  public distanceFade = 1;
 
   constructor(haloTexture: THREE.Texture) {
     this.group = new THREE.Group();
     this.group.visible = false;
 
     const dark = new Uint8Array([10, 10, 16, 255]);
-    this.fallbackTex = new THREE.DataTexture(dark, 1, 1, THREE.RGBAFormat);
+    this.fallbackTex = new THREE.DataTexture(
+      dark,
+      1,
+      1,
+      THREE.RGBAFormat
+    );
     this.fallbackTex.needsUpdate = true;
-
     this.ripples = new Float32Array(MAX_RIPPLES * 4);
 
-    // ---- layer 1: image plane ----
     this.mirrorMat = new THREE.ShaderMaterial({
       vertexShader: PLANE_VERT,
       fragmentShader: PLANE_FRAG,
       transparent: true,
       depthWrite: false,
       side: THREE.DoubleSide,
-      uniforms: {
-        uMap: { value: this.fallbackTex },
-        uHasMap: { value: 0 },
-        uTime: { value: 0 },
-        uAspect: { value: PLANE_W / PLANE_H },
-        uColor: { value: new THREE.Color('#8d85c6') },
-        uBass: { value: 0 },
-        uHighs: { value: 0 },
-        uOpacity: { value: 0 },
-        uReveal: { value: 0 },
-        uRipples: { value: this.ripples },
-      },
+      blending: THREE.NormalBlending,
+      uniforms: this.makeUniforms(),
     });
-    this.plane = new THREE.Mesh(new THREE.PlaneGeometry(PLANE_W, PLANE_H), this.mirrorMat);
+    this.plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(PLANE_W, PLANE_H),
+      this.mirrorMat
+    );
+    // The centre is a stable image surface. Its edge pixels are cut out by the
+    // same transfer field that creates the particles, so the two layers remain
+    // one dissolving object rather than a photo with a decorative particle ring.
+    this.plane.visible = true;
     this.plane.renderOrder = 20;
     this.group.add(this.plane);
 
-    // ---- layer 2: rim particle band, WIDE (e ∈ [0.62, 1.35]) ----
-    // overlaps the image's dissolve zone (grains take over as the image fades)
-    // and feathers far out into plumes. Density profile keeps it a soft glow.
-    const GRID_W = 108;
-    const GRID_H = 146;
+    // Keep one point for every image-grid cell. The shader owns the organic
+    // boundary, so plane and points cannot drift into mismatched shape rules.
     const homes: number[] = [];
-    const rands: number[] = [];
-    const edges: number[] = [];
-    const inners: number[] = [];
     for (let gy = 0; gy < GRID_H; gy++) {
       for (let gx = 0; gx < GRID_W; gx++) {
-        const u = (gx + 0.5) / GRID_W + (Math.random() - 0.5) * (0.8 / GRID_W);
-        const v = (gy + 0.5) / GRID_H + (Math.random() - 0.5) * (0.8 / GRID_H);
-        const ex = (u - 0.5) / 0.33;
-        const ey = (v - 0.5) / 0.43;
-        const e = Math.sqrt(ex * ex + ey * ey);
-        if (e > 1.35) continue;
-        const inner = e < 0.62; // interior veil dust — the lens body before the cover develops
-        if (inner && Math.random() < 0.2) continue; // keep the veil airy
+        const u = (gx + 0.5) / GRID_W;
+        const v = (gy + 0.5) / GRID_H;
         homes.push(u, v);
-        rands.push(Math.random());
-        edges.push(inner ? 0 : THREE.MathUtils.clamp((e - 0.62) / (1.35 - 0.62), 0, 1));
-        inners.push(inner ? 1 : 0);
       }
     }
-    const COUNT = rands.length;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(COUNT * 3), 3));
-    geo.setAttribute('aHome', new THREE.BufferAttribute(new Float32Array(homes), 2));
-    geo.setAttribute('aRand', new THREE.BufferAttribute(new Float32Array(rands), 1));
-    geo.setAttribute('aEdge', new THREE.BufferAttribute(new Float32Array(edges), 1));
-    geo.setAttribute('aInner', new THREE.BufferAttribute(new Float32Array(inners), 1));
-    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 200);
+    const count = homes.length / 2;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      'position',
+      new THREE.BufferAttribute(new Float32Array(count * 3), 3)
+    );
+    geometry.setAttribute(
+      'aHome',
+      new THREE.BufferAttribute(new Float32Array(homes), 2)
+    );
+    geometry.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3(),
+      210
+    );
 
     this.rimMat = new THREE.ShaderMaterial({
-      vertexShader: RIM_VERT,
-      fragmentShader: RIM_FRAG,
+      vertexShader: PARTICLE_VERT,
+      fragmentShader: PARTICLE_FRAG,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      uniforms: {
-        uMap: { value: this.fallbackTex },
-        uHasMap: { value: 0 },
-        uTime: { value: 0 },
-        uForm: { value: 0 },
-        uVeil: { value: 1 },
-        uOpacity: { value: 0 },
-        uBass: { value: 0 },
-        uHighs: { value: 0 },
-        uColor: { value: new THREE.Color('#8d85c6') },
-        uRipples: { value: this.ripples }, // shared with the plane — one set of waves
-        uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
-        uAspect: { value: PLANE_W / PLANE_H },
-      },
+      blending: THREE.NormalBlending,
+      uniforms: this.makeUniforms(),
     });
-    this.rim = new THREE.Points(geo, this.rimMat);
+    this.rim = new THREE.Points(geometry, this.rimMat);
     this.rim.renderOrder = 21;
     this.group.add(this.rim);
 
-    // pointer raycast plane (slightly oversized to catch the rim band)
     this.hit = new THREE.Mesh(
-      new THREE.PlaneGeometry(PLANE_W * 1.2, PLANE_H * 1.2),
-      new THREE.MeshBasicMaterial({ visible: false })
+      // A shallow volume keeps hover/click interaction alive when the player
+      // flies around the particle fabric and views it from the side or back.
+      new THREE.BoxGeometry(PLANE_W * 1.2, PLANE_H * 1.2, 7),
+      new THREE.MeshBasicMaterial({
+        visible: false,
+        side: THREE.DoubleSide,
+      })
     );
     this.group.add(this.hit);
 
-    // soft halo behind everything — faint and cool, not a theme-color backlight
     this.halo = new THREE.Sprite(
       new THREE.SpriteMaterial({
         map: haloTexture,
-        color: new THREE.Color('#6b7290'),
+        color: new THREE.Color('#d8dbe2'),
         transparent: true,
-        opacity: 0.06,
+        opacity: 0.012,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
@@ -424,66 +763,188 @@ export class TimeMirror {
     this.group.add(this.halo);
   }
 
+  private makeUniforms() {
+    return {
+      uMap: { value: this.fallbackTex },
+      uHasMap: { value: 0 },
+      uTime: { value: 0 },
+      uAspect: { value: PLANE_W / PLANE_H },
+      uColor: { value: new THREE.Color('#8d85c6') },
+      uBass: { value: 0 },
+      uHighs: { value: 0 },
+      uAudioEnergy: { value: 0 },
+      uErosion: { value: 0 },
+      uBurst: { value: 0 },
+      uOpacity: { value: 0 },
+      uDistanceFade: { value: 1 },
+      uForm: { value: 0 },
+      uRipples: { value: this.ripples },
+      uPointer: { value: new THREE.Vector4(0.5, 0.5, 0, 0) },
+      uPointerVelocity: { value: new THREE.Vector2() },
+      uPixelRatio: {
+        // Keep point size aligned with the renderer's Retina cap.
+        value: Math.min(window.devicePixelRatio, 1.6),
+      },
+    };
+  }
+
   get hitMesh(): THREE.Mesh {
     return this.hit;
   }
 
+  /** Orient once toward the final approach point, then remain world-fixed. */
+  faceToward(position: THREE.Vector3) {
+    this.group.lookAt(position);
+  }
+
+  /** Continuous local gravity well used by mouse hover. */
+  setPointer(
+    u: number,
+    v: number,
+    velocityX = 0,
+    velocityY = 0
+  ) {
+    this.pointerTarget = 1;
+    for (const uniforms of [
+      this.mirrorMat.uniforms,
+      this.rimMat.uniforms,
+    ]) {
+      const pointer = uniforms.uPointer.value as THREE.Vector4;
+      pointer.x = u;
+      pointer.y = v;
+      (
+        uniforms.uPointerVelocity.value as THREE.Vector2
+      ).set(velocityX, velocityY);
+    }
+  }
+
+  clearPointer() {
+    this.pointerTarget = 0;
+  }
+
+  setPixelRatio(pixelRatio: number) {
+    for (const uniforms of [
+      this.mirrorMat.uniforms,
+      this.rimMat.uniforms,
+    ]) {
+      uniforms.uPixelRatio.value = pixelRatio;
+    }
+  }
+
   open(position: THREE.Vector3, color: string) {
+    this.transitionEpoch++;
     this.group.position.copy(position);
-    (this.mirrorMat.uniforms.uColor.value as THREE.Color).set(color);
-    (this.rimMat.uniforms.uColor.value as THREE.Color).set(color);
-    (this.halo.material as THREE.SpriteMaterial).color.set(color);
+    (
+      this.mirrorMat.uniforms.uColor.value as THREE.Color
+    ).set(color);
+    (
+      this.rimMat.uniforms.uColor.value as THREE.Color
+    ).set(color);
     this.ripples.fill(0);
+    this.pointerTarget = 0;
+    this.pointerStrength = 0;
     this.group.visible = true;
     this.group.scale.setScalar(1);
     this.isOpen = true;
+    this.distanceFade = 1;
 
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil]);
-    // the lens is BORN AS PURE GRAIN DUST — the whole particle body (band +
-    // interior veil) assembles during the flight. The cover develops only
-    // once its texture is ready: the veil blows away and the image fades up
-    // beneath it (scheduleUnveil).
-    pm.uReveal.value = 0;
-    rm.uVeil.value = 1;
-    this.unveilStarted = false;
-    this.openAt = this.lastTime;
-    gsap.fromTo(rm.uForm, { value: 0 }, { value: 1, duration: 0.8, ease: 'expo.out' });
-    gsap.fromTo(rm.uOpacity, { value: 0 }, { value: 1, duration: 0.4, ease: 'power2.out' });
-    gsap.fromTo(pm.uOpacity, { value: 0 }, { value: 1, duration: 0.45, ease: 'power2.out', delay: 0.15 });
-    gsap.fromTo(this.halo.material as THREE.SpriteMaterial, { opacity: 0 }, { opacity: 0.1, duration: 0.8 });
-    // texture already loaded (cached cover): unveil as soon as the dust body
-    // has taken shape — the WHOLE sequence must finish within the flight
-    if (this.hasTexture) this.scheduleUnveil(0.45);
+    pm.uDistanceFade.value = 1;
+    rm.uDistanceFade.value = 1;
+    gsap.killTweensOf([
+      pm.uForm,
+      pm.uOpacity,
+      rm.uForm,
+      rm.uOpacity,
+    ]);
+    gsap.killTweensOf(this.halo.material);
+    gsap.fromTo(
+      rm.uForm,
+      { value: 0 },
+      { value: 1, duration: 1.45, ease: 'expo.out' }
+    );
+    gsap.fromTo(
+      rm.uOpacity,
+      { value: 0 },
+      { value: 1, duration: 0.55, ease: 'power2.out' }
+    );
+    gsap.fromTo(
+      pm.uForm,
+      { value: 0 },
+      {
+        value: 1,
+        duration: 1.55,
+        ease: 'power2.inOut',
+        delay: 0.22,
+      }
+    );
+    gsap.fromTo(
+      pm.uOpacity,
+      { value: 0 },
+      {
+        value: 1,
+        duration: 0.62,
+        ease: 'power2.out',
+        delay: 0.18,
+      }
+    );
+    gsap.fromTo(
+      this.halo.material as THREE.SpriteMaterial,
+      { opacity: 0 },
+      { opacity: 0.012, duration: 1.1 }
+    );
   }
 
   close(onDone?: () => void) {
-    if (!this.isOpen) { onDone?.(); return; }
+    if (!this.isOpen) {
+      onDone?.();
+      return;
+    }
+
     this.isOpen = false;
+    this.clearPointer();
+    const closeTransition = ++this.transitionEpoch;
+    const textureAtClose = this.textureEpoch;
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uReveal, pm.uOpacity, rm.uForm, rm.uOpacity, rm.uVeil]);
-    gsap.to(pm.uReveal, { value: 0, duration: 0.5, ease: 'power2.in' });
-    gsap.to(rm.uForm, { value: 0, duration: 0.9, ease: 'power2.in' });
-    gsap.to(this.halo.material as THREE.SpriteMaterial, { opacity: 0, duration: 0.5 });
-    const epochAtClose = this.texEpoch;
+    gsap.killTweensOf([
+      pm.uForm,
+      pm.uOpacity,
+      rm.uForm,
+      rm.uOpacity,
+    ]);
+    gsap.killTweensOf(this.halo.material);
+    gsap.to(pm.uForm, {
+      value: 0,
+      duration: 0.65,
+      ease: 'power2.in',
+    });
+    gsap.to(rm.uForm, {
+      value: 0,
+      duration: 0.78,
+      ease: 'power2.in',
+    });
+    gsap.to(
+      this.halo.material as THREE.SpriteMaterial,
+      { opacity: 0, duration: 0.45 }
+    );
     gsap.to([pm.uOpacity, rm.uOpacity], {
       value: 0,
-      duration: 0.8,
+      duration: 0.72,
       ease: 'power2.in',
       onComplete: () => {
+        // A fast re-open owns the object now; this stale close must not hide
+        // it or erase the newer cover texture.
+        if (
+          this.transitionEpoch !== closeTransition ||
+          this.isOpen
+        ) {
+          return;
+        }
         this.group.visible = false;
-        // Wipe the texture only if nothing newer arrived while we were fading
-        // out — otherwise a fast (cached) cover for the NEXT song would be
-        // erased by this deferred callback and the mirror would open empty.
-        if (this.texEpoch === epochAtClose) this.setTexture(null);
-        // reset to a dust body for the next opening — unless a newer open()
-        // already took over (isOpen flipped back to true)
-        if (!this.isOpen) {
-          pm.uReveal.value = 0;
-          rm.uVeil.value = 1;
-          this.unveilStarted = false;
+        if (this.textureEpoch === textureAtClose) {
+          this.setTexture(null);
         }
         onDone?.();
       },
@@ -491,65 +952,113 @@ export class TimeMirror {
   }
 
   setTexture(tex: THREE.Texture | null) {
-    this.texEpoch++;
-    this.hasTexture = !!tex;
+    this.textureEpoch++;
     const target = tex || this.fallbackTex;
+    const planeHasMap = this.mirrorMat.uniforms.uHasMap;
+    const particleHasMap = this.rimMat.uniforms.uHasMap;
+    gsap.killTweensOf([planeHasMap, particleHasMap]);
     this.mirrorMat.uniforms.uMap.value = target;
     this.rimMat.uniforms.uMap.value = target;
+
     if (tex) {
-      gsap.to([this.mirrorMat.uniforms.uHasMap, this.rimMat.uniforms.uHasMap], {
-        value: 1, duration: 1.0, ease: 'power2.inOut',
+      gsap.to([planeHasMap, particleHasMap], {
+        value: 1,
+        duration: 0.72,
+        ease: 'power2.inOut',
       });
-      // the cover is ready — let the dust body finish forming, then blow the
-      // veil away and develop the image beneath it
-      if (this.isOpen && !this.unveilStarted) {
-        this.scheduleUnveil(Math.max(0.1, 0.45 - (this.lastTime - this.openAt)));
-      }
     } else {
-      this.mirrorMat.uniforms.uHasMap.value = 0;
-      this.rimMat.uniforms.uHasMap.value = 0;
-      gsap.killTweensOf([this.mirrorMat.uniforms.uReveal, this.rimMat.uniforms.uVeil]);
-      this.mirrorMat.uniforms.uReveal.value = 0;
-      this.rimMat.uniforms.uVeil.value = 1;
-      this.unveilStarted = false;
+      planeHasMap.value = 0;
+      particleHasMap.value = 0;
     }
   }
 
-  /** Blow the interior dust away and develop the cover beneath it. */
-  private scheduleUnveil(delay: number) {
-    this.unveilStarted = true;
-    const pm = this.mirrorMat.uniforms;
-    const rm = this.rimMat.uniforms;
-    gsap.killTweensOf([pm.uReveal, rm.uVeil]);
-    gsap.to(rm.uVeil, { value: 0, duration: 1.0, ease: 'power2.inOut', delay });
-    gsap.to(pm.uReveal, { value: 1, duration: 0.9, ease: 'power2.inOut', delay: delay + 0.1 });
+  addRipple(
+    u: number,
+    v: number,
+    time: number,
+    strength = 1
+  ) {
+    const index = this.rippleIndex * 4;
+    this.ripples[index] = u;
+    this.ripples[index + 1] = v;
+    this.ripples[index + 2] = time;
+    this.ripples[index + 3] = strength * 0.58;
+    this.rippleIndex =
+      (this.rippleIndex + 1) % MAX_RIPPLES;
   }
 
-  /**
-   * Spawn a ripple at uv (0..1). The single wave rolls across BOTH the image
-   * plane and the rim particles — one soft, unified reaction, no repulsion.
-   */
-  addRipple(u: number, v: number, time: number, strength = 1) {
-    const i = this.rippleIndex * 4;
-    this.ripples[i] = u;
-    this.ripples[i + 1] = v;
-    this.ripples[i + 2] = time;
-    this.ripples[i + 3] = strength * 0.8;
-    this.rippleIndex = (this.rippleIndex + 1) % MAX_RIPPLES;
-  }
-
-  update(time: number, audio: AudioLevels, camera: THREE.Camera) {
+  update(
+    time: number,
+    audio: AudioLevels,
+    camera: THREE.Camera
+  ) {
+    const dt = this.lastTime
+      ? THREE.MathUtils.clamp(time - this.lastTime, 0.001, 0.1)
+      : 1 / 60;
     this.lastTime = time;
     if (!this.group.visible) return;
+
+    const targetEnergy = THREE.MathUtils.clamp(
+      audio.intensity * 0.46 +
+        audio.bass * 0.25 +
+        audio.mids * 0.21 +
+        audio.highs * 0.08,
+      0,
+      1
+    );
+    const smoothing = targetEnergy > this.erosion
+      ? 1 - Math.exp(-dt * 1.05)
+      : 1 - Math.exp(-dt * 0.24);
+    this.erosion +=
+      (targetEnergy - this.erosion) * smoothing;
+
+    // Only positive local musical changes create a burst, which then decays.
+    // Shader-side cluster clocks decide where the burst may actually appear.
+    const transient = Math.max(
+      0,
+      (audio.bass - this.previousBass) * 2.3 +
+        (audio.highs - this.previousHighs) * 1.15 -
+        0.055
+    );
+    this.previousBass = audio.bass;
+    this.previousHighs = audio.highs;
+    this.burst = Math.max(
+      this.burst * Math.exp(-dt * 1.45),
+      THREE.MathUtils.clamp(transient, 0, 1)
+    );
+
     const pm = this.mirrorMat.uniforms;
     const rm = this.rimMat.uniforms;
-    pm.uTime.value = time;
-    pm.uBass.value = audio.bass;
-    pm.uHighs.value = audio.highs;
-    rm.uTime.value = time;
-    rm.uBass.value = audio.bass;
-    rm.uHighs.value = audio.highs;
-    this.group.quaternion.copy((camera as THREE.PerspectiveCamera).quaternion);
+    const pointerEase = 1 - Math.exp(-dt * (
+      this.pointerTarget > this.pointerStrength ? 9.5 : 4.2
+    ));
+    this.pointerStrength +=
+      (this.pointerTarget - this.pointerStrength) * pointerEase;
+    for (const uniforms of [pm, rm]) {
+      uniforms.uTime.value = time;
+      uniforms.uBass.value = audio.bass;
+      uniforms.uHighs.value = audio.highs;
+      uniforms.uAudioEnergy.value = targetEnergy;
+      uniforms.uErosion.value = this.erosion;
+      uniforms.uBurst.value = this.burst;
+      (
+        uniforms.uPointer.value as THREE.Vector4
+      ).z = this.pointerStrength;
+    }
+
+    const distance =
+      camera.position.distanceTo(this.group.position);
+    const targetFade =
+      1 - THREE.MathUtils.smoothstep(distance, 85, 520);
+    pm.uDistanceFade.value +=
+      (targetFade - pm.uDistanceFade.value) * 0.12;
+    rm.uDistanceFade.value = pm.uDistanceFade.value;
+    this.distanceFade = pm.uDistanceFade.value;
+    if (this.isOpen) {
+      (
+        this.halo.material as THREE.SpriteMaterial
+      ).opacity = 0.012 * pm.uDistanceFade.value;
+    }
   }
 
   dispose() {
