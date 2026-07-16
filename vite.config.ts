@@ -25,7 +25,7 @@ const copyRuntimeAssets = {
       ...modelFiles,
     ];
     for (const file of files) {
-      const target = path.resolve(__dirname, 'dist', file);
+      const target = path.resolve(__dirname, 'dist', 'client', file);
       mkdirSync(path.dirname(target), {recursive: true});
       copyFileSync(path.resolve(__dirname, file), target);
     }
@@ -41,6 +41,7 @@ export default defineConfig(() => {
       },
     },
     build: {
+      outDir: 'dist/client',
       rollupOptions: {
         input: {
           main: path.resolve(__dirname, 'index.html'),

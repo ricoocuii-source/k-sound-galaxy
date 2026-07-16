@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild worker/index.ts --bundle --platform=browser --format=esm --outfile=dist/server/index.js",
+    "build": "rm -rf dist && vite build && esbuild worker/index.ts --bundle --platform=browser --format=esm --outfile=dist/server/index.js && cp worker/wrangler.json dist/server/wrangler.json",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
